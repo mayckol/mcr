@@ -189,3 +189,23 @@ Pushing a `v*` tag triggers `.github/workflows/release.yml`:
 
 The bundle version is synced from the git tag at build time so asset filenames
 match the URLs the installer and cask construct.
+
+---
+
+## Support
+
+If MCR saves you time, you can support its development:
+
+<a href="https://www.buymeacoffee.com/mayckol" target="_blank">
+  <img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black" alt="Buy me a coffee" />
+</a>
+
+☕ **[buymeacoffee.com/mayckol](https://www.buymeacoffee.com/mayckol)**
+
+## Contact
+
+Mayckol Ferreira — **[mayckol.dev](https://mayckol.dev)** (links & contacts).
+
+## License
+
+[MIT](LICENSE) © Mayckol Ferreira
