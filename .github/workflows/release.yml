@@ -1,0 +1,131 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-14
+            target: aarch64-apple-darwin
+            args: "--target aarch64-apple-darwin"
+          - platform: ubuntu-22.04
+            target: ""
+            args: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+
+      - name: Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      # Keep the bundled version in lockstep with the git tag. tauri-action stamps
+      # bundle filenames (e.g. MCR_<ver>_amd64.AppImage) from the config version;
+      # if it lags the tag, the published assets no longer match the URLs the
+      # install script and Homebrew cask build, and downloads 404.
+      - name: Sync version from tag
+        shell: bash
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          sed -i.bak -E "s/(\"version\":[[:space:]]*\")[^\"]*\"/\1${VER}\"/" src-tauri/tauri.conf.json
+          sed -i.bak -E "s/^version = \".*\"/version = \"${VER}\"/" src-tauri/Cargo.toml
+          rm -f src-tauri/tauri.conf.json.bak src-tauri/Cargo.toml.bak
+          echo "synced to $VER"; grep -m1 '"version"' src-tauri/tauri.conf.json
+
+      # Build the frontend explicitly (beforeBuildCommand is empty so the bundle
+      # step is independent of which directory the Tauri CLI runs it from).
+      - run: npm --prefix ui ci
+      - run: npm --prefix ui run build
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: src-tauri
+          tagName: ${{ github.ref_name }}
+          releaseName: "MCR ${{ github.ref_name }}"
+          releaseBody: "See CHANGELOG.md for details."
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
+
+  # Update the Homebrew cask in the tap with the new dmg + sha256.
+  # Requires a HOMEBREW_TAP_GITHUB_TOKEN secret with push access to the tap repo.
+  cask:
+    needs: build
+    runs-on: macos-14
+    if: ${{ !github.event.repository.private }}
+    steps:
+      - name: Build & push cask
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          TAP_REPO: mayckol/homebrew-tap
+        run: |
+          set -euo pipefail
+          [ -n "${TAP_TOKEN:-}" ] || { echo "HOMEBREW_TAP_GITHUB_TOKEN not set — skipping cask update"; exit 0; }
+          TAG="${GITHUB_REF_NAME}"; VER="${TAG#v}"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "*aarch64*.dmg" --dir .
+          DMG="$(ls *aarch64*.dmg 2>/dev/null | head -1)"
+          [ -n "$DMG" ] || { echo "No DMG found matching *aarch64*.dmg"; exit 1; }
+          SHA="$(shasum -a 256 "$DMG" | awk '{print $1}')"
+          cat > mcr.rb <<EOF
+          cask "mcr" do
+            version "${VER}"
+            sha256 "${SHA}"
+
+            url "https://github.com/${GITHUB_REPOSITORY}/releases/download/v#{version}/${DMG}"
+            name "MCR"
+            desc "Three-pane visual git merge editor"
+            homepage "https://github.com/${GITHUB_REPOSITORY}"
+
+            depends_on macos: :big_sur
+            depends_on arch: :arm64
+
+            app "MCR.app"
+
+            # Unsigned/ad-hoc build: strip the download quarantine on install so
+            # the app opens on a double-click instead of Gatekeeper blocking it.
+            postflight do
+              system_command "/usr/bin/xattr",
+                             args: ["-dr", "com.apple.quarantine", "#{appdir}/MCR.app"]
+            end
+
+            zap trash: [
+              "~/Library/Application Support/dev.mcr.mergeeditor",
+            ]
+          end
+          EOF
+          # Publish via the GitHub Contents API. A fine-grained PAT rejects the
+          # token-in-URL `git push` form, so write the file with the token as an
+          # API bearer instead.
+          B64="$(base64 -i mcr.rb | tr -d '\n')"
+          EXISTING="$(GH_TOKEN="$TAP_TOKEN" gh api repos/${TAP_REPO}/contents/Casks/mcr.rb --jq .sha 2>/dev/null || true)"
+          ARGS=(--method PUT repos/${TAP_REPO}/contents/Casks/mcr.rb -f "message=mcr ${VER}" -f "content=${B64}")
+          [ -n "${EXISTING}" ] && ARGS+=(-f "sha=${EXISTING}")
+          GH_TOKEN="$TAP_TOKEN" gh api "${ARGS[@]}"
