@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MCR — Merge Editor</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <header class="toolbar">
+      <span class="brand">MCR</span>
+      <button id="apply-left" title="Apply all non-conflicting from left">» Left</button>
+      <button id="apply-all" title="Apply all non-conflicting">All</button>
+      <button id="apply-right" title="Apply all non-conflicting from right">Right «</button>
+      <span class="sep"></span>
+      <button id="prev" title="Previous change">↑</button>
+      <button id="next" title="Next change">↓</button>
+      <button id="undo" title="Undo">⟲</button>
+      <button id="redo" title="Redo">⟳</button>
+      <span class="sep"></span>
+      <label>Whitespace
+        <select id="whitespace">
+          <option value="none">Do not ignore</option>
+          <option value="ignore_trailing">Ignore trailing</option>
+          <option value="ignore_all">Ignore all</option>
+        </select>
+      </label>
+      <button id="shortcuts" title="Keyboard shortcuts">⌨</button>
+      <span id="status" class="status"></span>
+    </header>
+
+    <div id="merge-container" class="merge">
+      <section class="col"><div class="col-title">Local</div><div id="pane-local" class="pane"></div></section>
+      <section class="col"><div class="col-title">Result</div><div id="pane-result" class="pane"></div></section>
+      <section class="col"><div class="col-title">Incoming</div><div id="pane-incoming" class="pane"></div></section>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

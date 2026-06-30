@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["crates/mcr-core"]
+exclude = ["src-tauri"]
+
+# src-tauri is a standalone crate (not a workspace member) so `cargo test -p mcr-core`
+# stays fast and free of the heavy webview toolchain. It references mcr-core by path.
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
