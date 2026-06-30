@@ -51,13 +51,16 @@ body { display: flex; flex-direction: column; }
   position: relative;
   flex: 1;
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  /* minmax(0,1fr) lets each column shrink below its content's intrinsic width,
+     so long code lines scroll *inside* a pane instead of blowing the three
+     columns past the viewport and forcing a window-level horizontal scroll. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 28px;
   min-height: 0;
   padding: 0 14px 14px;
 }
 
-.col { display: flex; flex-direction: column; min-height: 0; }
+.col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .col-title { padding: 6px 4px; opacity: 0.7; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
 .pane {
   flex: 1;

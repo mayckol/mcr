@@ -114,7 +114,7 @@ async function navigate(direction: "next" | "prev") {
   merge.result.dispatch({ selection: { anchor: line.from }, scrollIntoView: true });
 }
 
-syncScroll(merge.views(), scheduleRefresh);
+syncScroll(merge.views(), merge.result, scheduleRefresh);
 new ResizeObserver(scheduleRefresh).observe(container);
 window.addEventListener("resize", scheduleRefresh);
 if (document.fonts?.ready) document.fonts.ready.then(scheduleRefresh);
