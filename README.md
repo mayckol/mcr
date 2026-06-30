@@ -160,7 +160,7 @@ detaching launcher — so Git waits for the result):
 ```bash
 git config --global merge.tool mcr
 git config --global mergetool.mcr.cmd \
-  '/Applications/MCR.app/Contents/MacOS/MCR "$LOCAL" "$BASE" "$REMOTE" "$MERGED"'
+  '/Applications/MCR.app/Contents/MacOS/mcr-app "$LOCAL" "$BASE" "$REMOTE" "$MERGED"'
 git config --global mergetool.mcr.trustExitCode true
 ```
 
