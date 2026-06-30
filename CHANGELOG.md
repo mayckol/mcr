@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.2.0
+
+- Multi-file merge: `git mergetool` now opens one window listing every conflicted
+  file, with per-file status and overall progress. More than one conflict shows a
+  file list; a single conflict opens straight into the editor.
+- Resolve a whole file from the list with **Ours** / **Theirs**, jump to the next
+  unresolved file, and finish the whole merge from one place. Each file is written
+  and staged the moment it is resolved; exiting with conflicts left confirms first
+  and never stages unresolved content.
+- Same-line conflicts can keep **both** sides: accept one, then append the other.
+- The result pane is now freely editable, with undo/redo covering manual edits.
+
 ## v0.1.0
 
 Initial release.
