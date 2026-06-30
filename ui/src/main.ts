@@ -119,11 +119,35 @@ new ResizeObserver(scheduleRefresh).observe(container);
 window.addEventListener("resize", scheduleRefresh);
 if (document.fonts?.ready) document.fonts.ready.then(scheduleRefresh);
 
+// Merge-tool controls: write the result to Git's MERGED file and exit 0, or
+// abort with a non-zero status that tells Git the merge was not resolved.
+$("save-exit").addEventListener("click", async () => {
+  try {
+    await ipc.saveMerged(model.session_id);
+    await ipc.quit(0);
+  } catch (e) {
+    $("status").textContent = `Save failed: ${e}`;
+  }
+});
+$("abort").addEventListener("click", () => ipc.quit(1));
+
+function setMergeToolMode(on: boolean) {
+  $("merge-actions").style.display = on ? "flex" : "none";
+}
+
 async function boot() {
   if (inTauri) {
-    const demo = demoModel();
-    apply(await ipc.openSession({ local: demo.localText, ancestor: demo.ancestorText, incoming: demo.incomingText }));
+    const b = await ipc.bootstrap();
+    if (b.mode === "merge" && b.model) {
+      setMergeToolMode(true);
+      apply(b.model);
+    } else {
+      setMergeToolMode(false);
+      const demo = demoModel();
+      apply(await ipc.openSession({ local: demo.localText, ancestor: demo.ancestorText, incoming: demo.incomingText }));
+    }
   } else {
+    setMergeToolMode(false);
     apply(demoModel().model);
   }
 }

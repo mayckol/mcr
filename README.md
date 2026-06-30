@@ -145,9 +145,44 @@ Click the **⌨** toolbar button to open the shortcuts panel: click any shortcut
 press the new keys to rebind it, `Esc` cancels, **Reset to defaults** restores
 them. Bindings are saved and persist across restarts.
 
-> **Note:** wiring MCR as a drop-in `git mergetool` (consuming Git's
-> `LOCAL` / `BASE` / `REMOTE` / `MERGED` files from the terminal) is on the
-> roadmap. Today the editor runs as a standalone app.
+### Use as a `git mergetool`
+
+MCR honors Git's mergetool contract: it reads `LOCAL` / `BASE` / `REMOTE`,
+resolves into `MERGED`, and exits `0` on **Save & Exit** or non-zero on
+**Abort**. When invoked with four file paths it opens those files instead of the
+demo; otherwise it runs standalone.
+
+Configure it once (the `.cmd` must point at the **blocking** binary — not the
+detaching launcher — so Git waits for the result):
+
+**macOS:**
+
+```bash
+git config --global merge.tool mcr
+git config --global mergetool.mcr.cmd \
+  '/Applications/MCR.app/Contents/MacOS/MCR "$LOCAL" "$BASE" "$REMOTE" "$MERGED"'
+git config --global mergetool.mcr.trustExitCode true
+```
+
+**Linux:**
+
+```bash
+git config --global merge.tool mcr
+git config --global mergetool.mcr.cmd \
+  '"$HOME/.local/bin/mcr.AppImage" "$LOCAL" "$BASE" "$REMOTE" "$MERGED"'
+git config --global mergetool.mcr.trustExitCode true
+```
+
+Then, on a conflicted repo:
+
+```bash
+git merge some-branch     # produces conflicts
+git mergetool             # opens MCR for each conflicted file
+```
+
+Resolve with the apply/revert gizmos, click **Save & Exit** (writes `MERGED`,
+exit 0) to mark the file resolved, or **Abort** (exit 1) to leave it conflicted.
+`trustExitCode true` tells Git to believe those codes.
 
 ---
 

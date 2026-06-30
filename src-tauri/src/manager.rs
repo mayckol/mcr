@@ -2,11 +2,27 @@ use mcr_core::{MergeSession, Side, SessionModel, WhitespaceMode};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+/// The four files Git's mergetool contract passes in.
+#[derive(Clone, Debug)]
+pub struct MergeFiles {
+    pub local: String,
+    pub base: String,
+    pub remote: String,
+    pub merged: String,
+}
+
+/// How the app was launched: as a Git mergetool (with files) or standalone.
+#[derive(Default)]
+pub struct Launch {
+    pub merge: Option<MergeFiles>,
+}
+
 /// Framework-agnostic session store. Holds all open merge sessions and forwards
 /// intents to `mcr-core`. Kept free of Tauri types so it is unit-testable.
 #[derive(Default)]
 pub struct SessionManager {
     sessions: Mutex<HashMap<String, MergeSession>>,
+    merged_paths: Mutex<HashMap<String, String>>,
     counter: Mutex<u64>,
 }
 
@@ -42,6 +58,42 @@ impl SessionManager {
         let model = session.to_model();
         self.sessions.lock().unwrap().insert(id, session);
         model
+    }
+
+    /// Open a session from Git's mergetool files and remember where to write the
+    /// resolution. `base` may be empty (a 2-way merge with no common ancestor).
+    pub fn open_files(&self, files: &MergeFiles) -> Result<SessionModel, String> {
+        let local = std::fs::read_to_string(&files.local)
+            .map_err(|e| format!("read LOCAL {}: {e}", files.local))?;
+        let base = std::fs::read_to_string(&files.base).unwrap_or_default();
+        let remote = std::fs::read_to_string(&files.remote)
+            .map_err(|e| format!("read REMOTE {}: {e}", files.remote))?;
+        let id = self.next_id();
+        let session = MergeSession::open(id.clone(), &local, &base, &remote, WhitespaceMode::None);
+        let model = session.to_model();
+        self.sessions.lock().unwrap().insert(id.clone(), session);
+        self.merged_paths.lock().unwrap().insert(id, files.merged.clone());
+        Ok(model)
+    }
+
+    /// Write the current result to the session's MERGED path (mergetool contract).
+    pub fn save_merged(&self, session_id: &str) -> Result<(), String> {
+        let text = {
+            let map = self.sessions.lock().unwrap();
+            let session = map
+                .get(session_id)
+                .ok_or_else(|| format!("unknown session: {session_id}"))?;
+            session.to_model().panes.result.join("\n")
+        };
+        let path = self
+            .merged_paths
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .cloned()
+            .ok_or_else(|| format!("no MERGED path for session: {session_id}"))?;
+        std::fs::write(&path, text).map_err(|e| format!("write MERGED {path}: {e}"))?;
+        Ok(())
     }
 
     fn with<F>(&self, session_id: &str, f: F) -> Result<SessionModel, String>
@@ -137,5 +189,34 @@ mod tests {
     fn unknown_session_errors() {
         let m = SessionManager::new();
         assert!(m.undo("nope").is_err());
+    }
+
+    #[test]
+    fn mergetool_files_roundtrip() {
+        let dir = std::env::temp_dir().join("mcr-test-merge");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = |n: &str| dir.join(n).to_string_lossy().to_string();
+        std::fs::write(p("LOCAL"), "title: LOCAL\nshared\n").unwrap();
+        std::fs::write(p("BASE"), "title: BASE\nshared\n").unwrap();
+        std::fs::write(p("REMOTE"), "title: REMOTE\nshared\n").unwrap();
+        std::fs::write(p("MERGED"), "<<< conflict markers >>>").unwrap();
+
+        let m = SessionManager::new();
+        let files = MergeFiles {
+            local: p("LOCAL"),
+            base: p("BASE"),
+            remote: p("REMOTE"),
+            merged: p("MERGED"),
+        };
+        let model = m.open_files(&files).unwrap();
+        let conflict = model.hunks.iter().find(|h| h.category == mcr_core::Category::Conflicting).unwrap();
+
+        // Resolve the conflict to the local side, then write MERGED.
+        m.apply_change(&model.session_id, conflict.id, "local").unwrap();
+        m.save_merged(&model.session_id).unwrap();
+
+        let written = std::fs::read_to_string(p("MERGED")).unwrap();
+        assert!(written.contains("title: LOCAL"));
+        assert!(!written.contains("conflict markers"));
     }
 }

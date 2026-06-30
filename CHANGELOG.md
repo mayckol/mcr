@@ -9,6 +9,8 @@ Initial release.
   ribbons, synced scrolling, and per-change apply/revert gizmos.
 - Rust core engine: three-way diff3, alignment with filler, reversible
   apply/revert/undo/redo, whitespace modes.
+- Drop-in `git mergetool`: opens Git's LOCAL/BASE/REMOTE files, writes MERGED on
+  Save & Exit (exit 0) or aborts (non-zero).
 - Configurable keyboard shortcuts (Cmd+Z / Cmd+Shift+Z by default) with a rebind
   panel.
 - Tokyo Night theme.

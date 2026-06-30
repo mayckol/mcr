@@ -11,7 +11,18 @@ export interface OpenInput {
   whitespace_mode?: "none" | "ignore_trailing" | "ignore_all";
 }
 
+export interface Bootstrap {
+  mode: "merge" | "demo";
+  model: SessionModel | null;
+}
+
 export const ipc = {
+  bootstrap: () => invoke<Bootstrap>("bootstrap"),
+
+  saveMerged: (sessionId: string) => invoke<void>("save_merged", { sessionId }),
+
+  quit: (code: number) => invoke<void>("quit", { code }),
+
   openSession: (input: OpenInput) =>
     invoke<SessionModel>("open_session", input as unknown as Record<string, unknown>),
 
