@@ -60,12 +60,18 @@ pub enum Pane {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HunkState {
     Unresolved,
-    Applied { from: Side },
+    Applied {
+        from: Side,
+    },
     /// Both sides kept for one conflict; `first` is the side placed on top, the
     /// other side is appended below (accept-both / append the opposite side).
-    AppliedBoth { first: Side },
+    AppliedBoth {
+        first: Side,
+    },
     Rejected,
-    ManuallyEdited { lines: Vec<String> },
+    ManuallyEdited {
+        lines: Vec<String>,
+    },
 }
 
 /// Exact word/character span within a changed line (intra-line highlight).

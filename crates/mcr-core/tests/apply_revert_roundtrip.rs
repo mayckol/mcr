@@ -51,8 +51,14 @@ fn accept_both_keeps_both_sides_in_order_and_is_reversible() {
     // Accept local, then append incoming (accept-both, local on top).
     s.apply(id, Side::Local);
     let both = s.apply_both(id, Side::Local).panes.result;
-    let li = both.iter().position(|l| l == "two-LEFT").expect("local kept");
-    let ri = both.iter().position(|l| l == "two-RIGHT").expect("incoming appended");
+    let li = both
+        .iter()
+        .position(|l| l == "two-LEFT")
+        .expect("local kept");
+    let ri = both
+        .iter()
+        .position(|l| l == "two-RIGHT")
+        .expect("incoming appended");
     assert!(li < ri, "first side (local) must be on top: {both:?}");
     assert_eq!(s.to_model().status.remaining_conflicts, 0);
 
@@ -60,7 +66,10 @@ fn accept_both_keeps_both_sides_in_order_and_is_reversible() {
     let inc_first = s.apply_both(id, Side::Incoming).panes.result;
     let li2 = inc_first.iter().position(|l| l == "two-LEFT").unwrap();
     let ri2 = inc_first.iter().position(|l| l == "two-RIGHT").unwrap();
-    assert!(ri2 < li2, "incoming-first must put incoming on top: {inc_first:?}");
+    assert!(
+        ri2 < li2,
+        "incoming-first must put incoming on top: {inc_first:?}"
+    );
 
     // Undo returns to the single-side apply (not all the way to unresolved).
     s.undo();
@@ -82,14 +91,21 @@ fn manual_full_result_overrides_then_gizmo_clears_it() {
     let m = s.set_full_result(edited);
     assert_eq!(
         m.panes.result,
-        vec!["totally".to_string(), "hand written".to_string(), "result".to_string()],
+        vec![
+            "totally".to_string(),
+            "hand written".to_string(),
+            "result".to_string()
+        ],
         "manual edit must be the authoritative result"
     );
 
     // Any hunk gizmo operation supersedes the manual override.
     let id = s.to_model().hunks[0].id;
     let after = s.apply(id, Side::Local).panes.result;
-    assert!(!after.contains(&"hand written".to_string()), "gizmo must clear manual override");
+    assert!(
+        !after.contains(&"hand written".to_string()),
+        "gizmo must clear manual override"
+    );
 }
 
 #[test]
@@ -121,7 +137,11 @@ fn undo_gizmo_restores_prior_manual_edit() {
 
     // A gizmo supersedes the manual edit...
     s.apply(id, Side::Local);
-    assert!(!s.to_model().panes.result.contains(&"manual text".to_string()));
+    assert!(!s
+        .to_model()
+        .panes
+        .result
+        .contains(&"manual text".to_string()));
     // ...and undoing the gizmo restores it (the manual override is in the history).
     assert_eq!(s.undo().panes.result, vec!["manual text".to_string()]);
 }

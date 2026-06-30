@@ -271,14 +271,19 @@ impl MergeSession {
     /// transition (the gizmo cleared a manual edit), so undo restores both.
     fn commit(&mut self, changes: Vec<HunkChange>, manual_before: Option<Vec<String>>) {
         let manual_after = self.manual.clone();
-        let manual = (manual_before != manual_after)
-            .then_some(ManualChange { before: manual_before, after: manual_after });
+        let manual = (manual_before != manual_after).then_some(ManualChange {
+            before: manual_before,
+            after: manual_after,
+        });
         self.log.record(Operation { changes, manual });
     }
 
     pub fn apply(&mut self, id: usize, from: Side) -> SessionModel {
         let manual_before = self.manual.take();
-        let changes = self.set_state(id, HunkState::Applied { from }).into_iter().collect();
+        let changes = self
+            .set_state(id, HunkState::Applied { from })
+            .into_iter()
+            .collect();
         self.commit(changes, manual_before);
         self.to_model()
     }
@@ -296,7 +301,10 @@ impl MergeSession {
 
     pub fn revert(&mut self, id: usize) -> SessionModel {
         let manual_before = self.manual.take();
-        let changes = self.set_state(id, HunkState::Unresolved).into_iter().collect();
+        let changes = self
+            .set_state(id, HunkState::Unresolved)
+            .into_iter()
+            .collect();
         self.commit(changes, manual_before);
         self.to_model()
     }
