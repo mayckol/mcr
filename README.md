@@ -173,6 +173,17 @@ git config --global mergetool.mcr.cmd \
 git config --global mergetool.mcr.trustExitCode true
 ```
 
+**Per-project instead of global:** run the same commands with `--local` (the
+default scope inside a repo) so only that project uses MCR — it writes to
+`.git/config`:
+
+```bash
+# from inside the repo
+git config --local merge.tool mcr
+git config --local mergetool.mcr.cmd '<same cmd as above for your OS>'
+git config --local mergetool.mcr.trustExitCode true
+```
+
 Then, on a conflicted repo:
 
 ```bash
