@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { SessionModel, Side } from "./types";
+import type {
+  SessionModel,
+  Side,
+  SessionSummary,
+  SessionProgress,
+  FinishOutcome,
+} from "./types";
 
 // Typed wrappers over the Tauri command surface (contracts/ipc-merge-session.md).
 // The UI only dispatches intents through these; it never derives merge state.
@@ -13,11 +19,31 @@ export interface OpenInput {
 
 export interface Bootstrap {
   mode: "merge" | "demo";
-  model: SessionModel | null;
+  files: SessionSummary[];
+  progress: SessionProgress;
+  active: SessionModel | null;
+  file_name?: string | null;
 }
 
 export const ipc = {
   bootstrap: () => invoke<Bootstrap>("bootstrap"),
+
+  listSessions: () => invoke<[SessionSummary[], SessionProgress]>("list_sessions"),
+
+  selectSession: (sessionId: string) =>
+    invoke<SessionModel>("select_session", { sessionId }),
+
+  saveAndStage: (sessionId: string) => invoke<void>("save_and_stage", { sessionId }),
+
+  acceptFile: (sessionId: string, from: Side) =>
+    invoke<SessionSummary>("accept_file", { sessionId, from }),
+
+  nextUnresolved: (current: string | null) =>
+    invoke<string | null>("next_unresolved", { current }),
+
+  finish: () => invoke<FinishOutcome>("finish"),
+
+  exitCode: () => invoke<number>("exit_code"),
 
   saveMerged: (sessionId: string) => invoke<void>("save_merged", { sessionId }),
 
@@ -29,6 +55,9 @@ export const ipc = {
   applyChange: (sessionId: string, hunkId: number, from: Side) =>
     invoke<SessionModel>("apply_change", { sessionId, hunkId, from }),
 
+  applyBoth: (sessionId: string, hunkId: number, first: Side) =>
+    invoke<SessionModel>("apply_both", { sessionId, hunkId, first }),
+
   revertChange: (sessionId: string, hunkId: number) =>
     invoke<SessionModel>("revert_change", { sessionId, hunkId }),
 
@@ -37,6 +66,9 @@ export const ipc = {
 
   editResult: (sessionId: string, start: number, end: number, text: string) =>
     invoke<SessionModel>("edit_result", { sessionId, start, end, text }),
+
+  editFullResult: (sessionId: string, text: string) =>
+    invoke<SessionModel>("edit_full_result", { sessionId, text }),
 
   undo: (sessionId: string) => invoke<SessionModel>("undo", { sessionId }),
   redo: (sessionId: string) => invoke<SessionModel>("redo", { sessionId }),

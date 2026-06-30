@@ -1,10 +1,12 @@
 use crate::hunk::HunkState;
 
-/// A reversible operation: one or more hunk state transitions captured with
-/// their before/after so undo/redo restore the exact prior state (FR-010, SC-005).
+/// A reversible operation: hunk state transitions and/or a free-form manual-result
+/// change captured with before/after so undo/redo restore the exact prior state
+/// (FR-010, SC-005).
 #[derive(Clone, Debug)]
 pub struct Operation {
     pub changes: Vec<HunkChange>,
+    pub manual: Option<ManualChange>,
 }
 
 #[derive(Clone, Debug)]
@@ -12,6 +14,13 @@ pub struct HunkChange {
     pub hunk_id: usize,
     pub before: HunkState,
     pub after: HunkState,
+}
+
+/// Before/after of the whole-result manual override (None = no override).
+#[derive(Clone, Debug)]
+pub struct ManualChange {
+    pub before: Option<Vec<String>>,
+    pub after: Option<Vec<String>>,
 }
 
 #[derive(Default)]
@@ -25,10 +34,22 @@ impl OperationLog {
         Self::default()
     }
 
-    /// Record a freshly-applied operation; clears the redo stack.
+    /// Record a freshly-applied operation; clears the redo stack. Consecutive
+    /// manual-only edits (typing bursts) coalesce into a single undo step.
     pub fn record(&mut self, op: Operation) {
-        if op.changes.is_empty() {
+        if op.changes.is_empty() && op.manual.is_none() {
             return;
+        }
+        if op.changes.is_empty() {
+            if let Some(last) = self.undo.last_mut() {
+                if last.changes.is_empty() {
+                    if let (Some(lm), Some(nm)) = (last.manual.as_mut(), op.manual.as_ref()) {
+                        lm.after = nm.after.clone();
+                        self.redo.clear();
+                        return;
+                    }
+                }
+            }
         }
         self.undo.push(op);
         self.redo.clear();

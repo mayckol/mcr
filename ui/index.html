@@ -28,16 +28,20 @@
       </label>
       <button id="shortcuts" title="Keyboard shortcuts">⌨</button>
       <span id="merge-actions" class="merge-actions" style="display:none">
+        <button id="next-file" title="Next unresolved file" style="display:none">⇥ Next file</button>
         <button id="save-exit" class="primary" title="Write result to MERGED and exit">Save &amp; Exit</button>
         <button id="abort" title="Abort the merge (non-zero exit)">Abort</button>
       </span>
       <span id="status" class="status"></span>
     </header>
 
-    <div id="merge-container" class="merge">
-      <section class="col"><div class="col-title">Local</div><div id="pane-local" class="pane"></div></section>
-      <section class="col"><div class="col-title">Result</div><div id="pane-result" class="pane"></div></section>
-      <section class="col"><div class="col-title">Incoming</div><div id="pane-incoming" class="pane"></div></section>
+    <div id="work" class="work">
+      <aside id="file-list" class="file-list" style="display:none"></aside>
+      <div id="merge-container" class="merge">
+        <section class="col"><div class="col-title">Local</div><div id="pane-local" class="pane"></div></section>
+        <section class="col"><div class="col-title">Result</div><div id="pane-result" class="pane"></div></section>
+        <section class="col"><div class="col-title">Incoming</div><div id="pane-incoming" class="pane"></div></section>
+      </div>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

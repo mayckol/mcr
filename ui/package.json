@@ -11,6 +11,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/legacy-modes": "^6.5.3",
     "@codemirror/state": "^6.4.1",
     "@codemirror/view": "^6.26.0",
     "@tauri-apps/api": "^2.0.0"

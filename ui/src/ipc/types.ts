@@ -8,6 +8,7 @@ export type PaneName = "local" | "result" | "incoming";
 export type HunkState =
   | { kind: "unresolved" }
   | { kind: "applied"; from: Side }
+  | { kind: "applied_both"; first: Side }
   | { kind: "rejected" }
   | { kind: "manually_edited"; lines: string[] };
 
@@ -59,4 +60,26 @@ export interface SessionModel {
   alignment: AlignRow[];
   hunks: ChangeRegion[];
   status: ResolutionStatus;
+}
+
+export type ConflictKind = "text" | "binary" | "delete-modify" | "both-added";
+
+export interface SessionSummary {
+  session_id: string;
+  path_label: string;
+  kind: ConflictKind;
+  resolved: boolean;
+  remaining_conflicts: number;
+}
+
+export interface SessionProgress {
+  total: number;
+  resolved_count: number;
+  remaining_conflicts: number;
+  all_resolved: boolean;
+}
+
+export interface FinishOutcome {
+  all_resolved: boolean;
+  unresolved: string[];
 }

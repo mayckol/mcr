@@ -5,7 +5,7 @@ import {
   gutterLineClass,
   GutterMarker,
 } from "@codemirror/view";
-import { StateField, StateEffect, RangeSetBuilder, RangeSet } from "@codemirror/state";
+import { StateField, StateEffect, RangeSetBuilder, RangeSet, type Range } from "@codemirror/state";
 import type { ChangeRegion, PaneName } from "../ipc/types";
 import { CATEGORY_COLORS } from "./theme";
 
@@ -22,27 +22,26 @@ function isResolved(h: ChangeRegion): boolean {
 }
 
 // Build line-band + word-span decorations for one pane from the hunk list.
+// Decorations are collected then sorted by Decoration.set: line-bands (at a line's
+// start) and word-marks (mid-line) interleave across positions, so a pre-sorted
+// RangeSetBuilder would throw on any multi-line hunk that also has word spans.
 function build(view: EditorView, pane: PaneName, hunks: ChangeRegion[]): DecorationSet {
-  const builder = new RangeSetBuilder<Decoration>();
   const docLines = view.state.doc.lines;
+  const decos: Range<Decoration>[] = [];
 
-  const ordered = [...hunks].sort((a, b) => rangeFor(a, pane).start - rangeFor(b, pane).start);
-
-  for (const h of ordered) {
+  for (const h of hunks) {
     const { start, end } = rangeFor(h, pane);
     const colors = CATEGORY_COLORS[h.category];
     const dim = isResolved(h) ? " mcr-resolved" : "";
     for (let ln = start; ln < end && ln < docLines; ln++) {
       const line = view.state.doc.line(ln + 1);
-      builder.add(
-        line.from,
-        line.from,
+      decos.push(
         Decoration.line({
           attributes: {
             class: `mcr-band mcr-${h.category}${dim}`,
             style: `background:${colors.band}`,
           },
-        })
+        }).range(line.from)
       );
     }
     for (const span of h.word_spans) {
@@ -52,18 +51,16 @@ function build(view: EditorView, pane: PaneName, hunks: ChangeRegion[]): Decorat
       const from = line.from + Math.min(span.start_col, line.length);
       const to = line.from + Math.min(span.end_col, line.length);
       if (to > from) {
-        builder.add(
-          from,
-          to,
+        decos.push(
           Decoration.mark({
             class: `mcr-word mcr-${h.category}`,
             attributes: { style: `background:${colors.word}` },
-          })
+          }).range(from, to)
         );
       }
     }
   }
-  return builder.finish();
+  return Decoration.set(decos, true);
 }
 
 // Gutter line marker so the line-number column shares the change tint

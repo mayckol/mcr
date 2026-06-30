@@ -61,6 +61,9 @@ pub enum Pane {
 pub enum HunkState {
     Unresolved,
     Applied { from: Side },
+    /// Both sides kept for one conflict; `first` is the side placed on top, the
+    /// other side is appended below (accept-both / append the opposite side).
+    AppliedBoth { first: Side },
     Rejected,
     ManuallyEdited { lines: Vec<String> },
 }

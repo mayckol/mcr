@@ -7,7 +7,7 @@ export const CATEGORY_COLORS: Record<Category, { band: string; word: string; con
   added: { band: "rgba(158, 206, 106, 0.20)", word: "rgba(158, 206, 106, 0.42)", connector: "#9ece6a" },
   removed: { band: "rgba(247, 118, 142, 0.20)", word: "rgba(247, 118, 142, 0.42)", connector: "#f7768e" },
   modified: { band: "rgba(122, 162, 247, 0.20)", word: "rgba(122, 162, 247, 0.42)", connector: "#7aa2f7" },
-  conflicting: { band: "rgba(224, 175, 104, 0.26)", word: "rgba(224, 175, 104, 0.48)", connector: "#e0af68" },
+  conflicting: { band: "rgba(224, 175, 104, 0.14)", word: "rgba(224, 175, 104, 0.32)", connector: "#d8b98a" },
 };
 
 export const RESOLVED_DIM = 0.5;

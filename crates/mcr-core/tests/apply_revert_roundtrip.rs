@@ -44,6 +44,89 @@ fn applying_conflict_left_then_right_switches_content() {
 }
 
 #[test]
+fn accept_both_keeps_both_sides_in_order_and_is_reversible() {
+    let mut s = open(fixtures::conflict());
+    let id = s.to_model().hunks[0].id;
+
+    // Accept local, then append incoming (accept-both, local on top).
+    s.apply(id, Side::Local);
+    let both = s.apply_both(id, Side::Local).panes.result;
+    let li = both.iter().position(|l| l == "two-LEFT").expect("local kept");
+    let ri = both.iter().position(|l| l == "two-RIGHT").expect("incoming appended");
+    assert!(li < ri, "first side (local) must be on top: {both:?}");
+    assert_eq!(s.to_model().status.remaining_conflicts, 0);
+
+    // Incoming-first ordering.
+    let inc_first = s.apply_both(id, Side::Incoming).panes.result;
+    let li2 = inc_first.iter().position(|l| l == "two-LEFT").unwrap();
+    let ri2 = inc_first.iter().position(|l| l == "two-RIGHT").unwrap();
+    assert!(ri2 < li2, "incoming-first must put incoming on top: {inc_first:?}");
+
+    // Undo returns to the single-side apply (not all the way to unresolved).
+    s.undo();
+    let after_undo = s.to_model();
+    assert!(matches!(
+        after_undo.hunks[0].state,
+        HunkState::AppliedBoth { first: Side::Local }
+    ));
+
+    // Revert clears it back to unresolved.
+    s.revert(id);
+    assert!(matches!(s.to_model().hunks[0].state, HunkState::Unresolved));
+}
+
+#[test]
+fn manual_full_result_overrides_then_gizmo_clears_it() {
+    let mut s = open(fixtures::conflict());
+    let edited = "totally\nhand written\nresult";
+    let m = s.set_full_result(edited);
+    assert_eq!(
+        m.panes.result,
+        vec!["totally".to_string(), "hand written".to_string(), "result".to_string()],
+        "manual edit must be the authoritative result"
+    );
+
+    // Any hunk gizmo operation supersedes the manual override.
+    let id = s.to_model().hunks[0].id;
+    let after = s.apply(id, Side::Local).panes.result;
+    assert!(!after.contains(&"hand written".to_string()), "gizmo must clear manual override");
+}
+
+#[test]
+fn manual_edits_coalesce_into_one_undo_step() {
+    let mut s = open(fixtures::conflict());
+    let projection = s.to_model().panes.result;
+
+    s.set_full_result("one\ntwo");
+    s.set_full_result("one\ntwo\nthree");
+    assert_eq!(
+        s.to_model().panes.result,
+        vec!["one".to_string(), "two".to_string(), "three".to_string()]
+    );
+
+    // One undo reverts the whole typing burst, not a single keystroke.
+    assert_eq!(s.undo().panes.result, projection);
+    // Redo restores the final manual text.
+    assert_eq!(
+        s.redo().panes.result,
+        vec!["one".to_string(), "two".to_string(), "three".to_string()]
+    );
+}
+
+#[test]
+fn undo_gizmo_restores_prior_manual_edit() {
+    let mut s = open(fixtures::conflict());
+    s.set_full_result("manual text");
+    let id = s.to_model().hunks[0].id;
+
+    // A gizmo supersedes the manual edit...
+    s.apply(id, Side::Local);
+    assert!(!s.to_model().panes.result.contains(&"manual text".to_string()));
+    // ...and undoing the gizmo restores it (the manual override is in the history).
+    assert_eq!(s.undo().panes.result, vec!["manual text".to_string()]);
+}
+
+#[test]
 fn adjacent_hunks_apply_revert_independently() {
     let mut s = open(fixtures::mixed());
     let model = s.to_model();

@@ -1,9 +1,11 @@
 import { EditorView } from "@codemirror/view";
-import type { ChangeRegion } from "../ipc/types";
+import type { ChangeRegion, Side } from "../ipc/types";
 
 export interface ControlCallbacks {
   applyLocal: (hunkId: number) => void;
   applyIncoming: (hunkId: number) => void;
+  // Keep both sides for a conflict; `first` is the side placed on top.
+  acceptBoth: (hunkId: number, first: Side) => void;
   revert: (hunkId: number) => void;
 }
 
@@ -50,7 +52,7 @@ export class ControlsLayer {
     Object.assign(btn.style, {
       position: "absolute",
       left: `${x}px`,
-      top: `${y - 9}px`,
+      top: `${y - 10}px`,
       pointerEvents: "auto",
     });
     btn.addEventListener("click", (e) => {
@@ -68,22 +70,35 @@ export class ControlsLayer {
     while (this.host.firstChild) this.host.removeChild(this.host.firstChild);
 
     for (const h of hunks) {
-      const applied = h.state.kind === "applied";
-      const showLocal = h.origin === "local" || h.origin === "both" || h.category === "conflicting";
-      const showIncoming =
-        h.origin === "incoming" || h.origin === "both" || h.category === "conflicting";
+      const isConflict = h.category === "conflicting";
+      const appliedFrom = h.state.kind === "applied" ? h.state.from : null;
+      const showRevert = h.state.kind === "applied" || h.state.kind === "applied_both";
+      const showLocal = h.origin === "local" || h.origin === "both" || isConflict;
+      const showIncoming = h.origin === "incoming" || h.origin === "both" || isConflict;
 
       if (showLocal) {
         const y = midY(this.left, h.local_range.start, h.local_range.end, cr.top);
-        if (y !== null) this.button("»", lr.right - cr.left - 18, y, "Apply from left", () => this.cb.applyLocal(h.id));
+        const x = lr.right - cr.left - 24;
+        // Incoming already applied → left becomes "append local after right".
+        if (y !== null && isConflict && appliedFrom === "incoming") {
+          this.button("»+", x, y, "Append left after right", () => this.cb.acceptBoth(h.id, "incoming"));
+        } else if (y !== null) {
+          this.button("»", x, y, "Apply from left", () => this.cb.applyLocal(h.id));
+        }
       }
       if (showIncoming) {
         const y = midY(this.right, h.incoming_range.start, h.incoming_range.end, cr.top);
-        if (y !== null) this.button("«", ir.left - cr.left + 2, y, "Apply from right", () => this.cb.applyIncoming(h.id));
+        const x = ir.left - cr.left + 2;
+        // Local already applied → right becomes "append right after left".
+        if (y !== null && isConflict && appliedFrom === "local") {
+          this.button("«+", x, y, "Append right after left", () => this.cb.acceptBoth(h.id, "local"));
+        } else if (y !== null) {
+          this.button("«", x, y, "Apply from right", () => this.cb.applyIncoming(h.id));
+        }
       }
-      if (applied) {
+      if (showRevert) {
         const y = midY(this.result, h.result_range.start, h.result_range.end, cr.top);
-        if (y !== null) this.button("×", rr.right - cr.left - 18, y, "Revert this change", () => this.cb.revert(h.id));
+        if (y !== null) this.button("×", rr.right - cr.left - 24, y, "Revert this change", () => this.cb.revert(h.id));
       }
     }
   }

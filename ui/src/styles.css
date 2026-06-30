@@ -6,9 +6,35 @@
   --fg-dim: #565f89;
   --border: #3b4261;
   --accent: #7aa2f7;
+  --cyan: #7dcfff;
+
+  /* Scrollbar — a crafted Tokyo Night element instead of the OS default. */
+  --scroll-size: 12px;
+  --scroll-thumb: #2c3252;
+  --scroll-thumb-hover: #3d4673;
+  --scroll-thumb-active: var(--accent);
+  --scroll-track: transparent;
 }
 
 * { box-sizing: border-box; }
+
+/* Firefox */
+* { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) var(--scroll-track); }
+
+/* WebKit / Blink (the Tauri webview). Thin, rounded, theme-tinted, with a
+   subtle hover/active brighten so the bar feels alive without shouting. */
+::-webkit-scrollbar { width: var(--scroll-size); height: var(--scroll-size); }
+::-webkit-scrollbar-track { background: var(--scroll-track); }
+::-webkit-scrollbar-corner { background: var(--scroll-track); }
+::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+  transition: background-color 0.15s ease;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); background-clip: padding-box; }
+::-webkit-scrollbar-thumb:active { background: var(--scroll-thumb-active); background-clip: padding-box; }
 
 html, body {
   margin: 0;
@@ -69,6 +95,11 @@ body { display: flex; flex-direction: column; }
   border-radius: 8px;
   overflow: hidden;
   background: var(--bg);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.pane:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .cm-editor { height: 100%; }
@@ -84,22 +115,25 @@ body { display: flex; flex-direction: column; }
 .cm-gutterElement.mcr-g-added { background: rgba(158, 206, 106, 0.20); }
 .cm-gutterElement.mcr-g-removed { background: rgba(247, 118, 142, 0.20); }
 .cm-gutterElement.mcr-g-modified { background: rgba(122, 162, 247, 0.20); }
-.cm-gutterElement.mcr-g-conflicting { background: rgba(224, 175, 104, 0.26); }
+.cm-gutterElement.mcr-g-conflicting { background: rgba(224, 175, 104, 0.14); }
 .cm-gutterElement.mcr-g-resolved { opacity: 0.7; }
 
 .mcr-gizmo {
-  width: 16px;
-  height: 16px;
-  line-height: 16px;
+  min-width: 20px;
+  height: 20px;
+  line-height: 20px;
   text-align: center;
-  font-size: 13px;
-  padding: 0;
+  font-size: 17px;
+  font-weight: 700;
+  padding: 0 2px;
   border: none;
   background: transparent;
-  color: var(--fg-dim);
+  color: var(--cyan);
   cursor: pointer;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+  transition: color 0.12s ease;
 }
-.mcr-gizmo:hover { color: var(--accent); }
+.mcr-gizmo:hover { color: #b4f9ff; }
 
 /* Shortcuts modal */
 .mcr-modal-overlay {
@@ -169,3 +203,88 @@ body { display: flex; flex-direction: column; }
   cursor: pointer;
 }
 .mcr-kb-reset:hover { border-color: var(--accent); }
+
+/* Multi-file: work row = file-list sidebar + the three-pane editor. */
+.work { flex: 1; display: flex; min-height: 0; min-width: 0; }
+
+.file-list {
+  width: 240px;
+  flex: 0 0 240px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-soft);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+.file-list-head {
+  padding: 8px 12px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--border);
+}
+.file-rows { flex: 1; overflow: auto; min-height: 0; }
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.file-row:hover { background: var(--bg-elev); }
+.file-row.active { background: var(--bg-elev); border-left-color: var(--accent); }
+.file-row.is-resolved .file-path { opacity: 0.6; }
+.file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+.file-status { width: 8px; height: 8px; border-radius: 999px; flex: 0 0 8px; }
+.file-status-resolved { background: #9ece6a; }
+.file-status-text { background: #e0af68; }
+.file-status-binary,
+.file-status-delete-modify,
+.file-status-both-added { background: #f7768e; }
+.file-accept { display: none; gap: 4px; }
+.file-row:hover .file-accept { display: flex; }
+.file-accept button {
+  height: 18px;
+  line-height: 16px;
+  font-size: 10px;
+  padding: 0 6px;
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.file-accept button:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Exit-confirmation modal body + buttons (reuses .mcr-modal shell). */
+.mcr-confirm-body { padding: 12px 14px; max-height: 50vh; overflow: auto; }
+.mcr-confirm-body p { margin: 0 0 8px; color: var(--fg-dim); }
+.mcr-confirm-list { margin: 0; padding-left: 18px; font-family: ui-monospace, monospace; }
+.mcr-confirm-list li { padding: 2px 0; }
+.mcr-confirm-cancel, .mcr-confirm-ok {
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+.mcr-confirm-cancel:hover { border-color: var(--accent); }
+.mcr-confirm-ok {
+  background: var(--accent);
+  color: #0d1117;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.mcr-confirm-ok:hover { filter: brightness(1.1); }

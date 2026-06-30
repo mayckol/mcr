@@ -4,6 +4,7 @@ import type { PaneName, SessionModel } from "../ipc/types";
 import { hunkDecorations, gutterBands, setHunks, viewHolder } from "../highlight/decorations";
 import { fillerField, planFillers, setFillers } from "./fillers";
 import { tokyoNight } from "../theme/tokyo";
+import { syntaxFor } from "../highlight/syntax";
 
 export interface MergeRoots {
   local: HTMLElement;
@@ -12,7 +13,8 @@ export interface MergeRoots {
 }
 
 export interface MergeCallbacks {
-  onResultEdit: (fromLine: number, toLine: number, text: string) => void;
+  // Full result text after a manual edit (free-form editing of the result pane).
+  onResultEdit: (fullText: string) => void;
   onGeometryChange: () => void;
 }
 
@@ -20,7 +22,8 @@ function makeView(
   parent: HTMLElement,
   pane: PaneName,
   editable: boolean,
-  cb: MergeCallbacks
+  cb: MergeCallbacks,
+  langGuard: Compartment
 ): EditorView {
   const editGuard = new Compartment();
   const view = new EditorView({
@@ -29,6 +32,7 @@ function makeView(
       doc: "",
       extensions: [
         tokyoNight,
+        langGuard.of(syntaxFor(null)),
         lineNumbers(),
         hunkDecorations(pane),
         gutterBands(pane),
@@ -37,23 +41,15 @@ function makeView(
         EditorView.updateListener.of((u) => {
           if (u.geometryChanged || u.viewportChanged) cb.onGeometryChange();
           if (editable && u.docChanged && !(u.transactions[0] as any)?.mcrProgrammatic) {
-            let from = u.state.doc.lines;
-            let to = 0;
-            u.changes.iterChangedRanges((_fA, _tA, fB, tB) => {
-              from = Math.min(from, u.state.doc.lineAt(fB).number - 1);
-              to = Math.max(to, u.state.doc.lineAt(tB).number);
-            });
-            const text = u.state.doc
-              .toString()
-              .split("\n")
-              .slice(from, to)
-              .join("\n");
-            cb.onResultEdit(from, to, text);
+            cb.onResultEdit(u.state.doc.toString());
           }
         }),
         EditorView.theme({
           "&": { height: "100%" },
-          ".cm-scroller": { overflow: "auto", fontFamily: "ui-monospace, monospace" },
+          // `overlay` floats the scrollbar over the content (WebKit/WKWebView) so
+          // the line band paints full-width *under* it instead of stopping at a
+          // reserved gutter. Degrades to `auto` where overlay is unsupported.
+          ".cm-scroller": { overflow: "overlay", fontFamily: "ui-monospace, monospace" },
         }),
       ],
     }),
@@ -67,14 +63,24 @@ export class MergeEditor {
   readonly result: EditorView;
   readonly incoming: EditorView;
 
+  private readonly langGuard = new Compartment();
+
   constructor(roots: MergeRoots, cb: MergeCallbacks) {
-    this.local = makeView(roots.local, "local", false, cb);
-    this.result = makeView(roots.result, "result", true, cb);
-    this.incoming = makeView(roots.incoming, "incoming", false, cb);
+    this.local = makeView(roots.local, "local", false, cb, this.langGuard);
+    this.result = makeView(roots.result, "result", true, cb, this.langGuard);
+    this.incoming = makeView(roots.incoming, "incoming", false, cb, this.langGuard);
   }
 
   views(): EditorView[] {
     return [this.local, this.result, this.incoming];
+  }
+
+  /** Reconfigure all three panes to highlight the given file's language. */
+  setLanguage(fileName: string | null | undefined) {
+    const ext = syntaxFor(fileName);
+    for (const view of this.views()) {
+      view.dispatch({ effects: this.langGuard.reconfigure(ext) });
+    }
   }
 
   load(model: SessionModel) {

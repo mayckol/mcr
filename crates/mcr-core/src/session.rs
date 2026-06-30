@@ -2,7 +2,7 @@ use crate::diff::{diff3, word_spans, Region, WhitespaceMode};
 use crate::hunk::{
     Category, ChangeRegion, HunkState, IntraLineSpan, LineRange, Origin, Pane, Side,
 };
-use crate::ops::{HunkChange, Operation, OperationLog};
+use crate::ops::{HunkChange, ManualChange, Operation, OperationLog};
 use crate::wire::{AlignRow, Panes, ResolutionStatus, SessionModel};
 
 fn split_lines(text: &str) -> Vec<String> {
@@ -28,6 +28,10 @@ pub struct MergeSession {
     regions: Vec<Region>,
     changes: Vec<ChangeMeta>,
     states: Vec<HunkState>,
+    /// Free-form manual edit of the whole result. When set it is the authoritative
+    /// result text (what gets written out); any hunk gizmo operation clears it so
+    /// the projection becomes authoritative again.
+    manual: Option<Vec<String>>,
     log: OperationLog,
 }
 
@@ -76,6 +80,7 @@ impl MergeSession {
             regions,
             changes,
             states,
+            manual: None,
             log: OperationLog::new(),
         }
     }
@@ -102,6 +107,18 @@ impl MergeSession {
             HunkState::Applied {
                 from: Side::Incoming,
             } => self.incoming[r.0..r.1].to_vec(),
+            HunkState::AppliedBoth { first: Side::Local } => {
+                let mut v = self.local[l.0..l.1].to_vec();
+                v.extend_from_slice(&self.incoming[r.0..r.1]);
+                v
+            }
+            HunkState::AppliedBoth {
+                first: Side::Incoming,
+            } => {
+                let mut v = self.incoming[r.0..r.1].to_vec();
+                v.extend_from_slice(&self.local[l.0..l.1]);
+                v
+            }
             HunkState::ManuallyEdited { lines } => lines.clone(),
         }
     }
@@ -186,7 +203,7 @@ impl MergeSession {
             session_id: self.id.clone(),
             panes: Panes {
                 local: self.local.clone(),
-                result,
+                result: self.manual.clone().unwrap_or(result),
                 incoming: self.incoming.clone(),
             },
             alignment: align,
@@ -250,21 +267,37 @@ impl MergeSession {
         })
     }
 
+    /// Record one operation capturing hunk changes plus any manual-override
+    /// transition (the gizmo cleared a manual edit), so undo restores both.
+    fn commit(&mut self, changes: Vec<HunkChange>, manual_before: Option<Vec<String>>) {
+        let manual_after = self.manual.clone();
+        let manual = (manual_before != manual_after)
+            .then_some(ManualChange { before: manual_before, after: manual_after });
+        self.log.record(Operation { changes, manual });
+    }
+
     pub fn apply(&mut self, id: usize, from: Side) -> SessionModel {
-        if let Some(change) = self.set_state(id, HunkState::Applied { from }) {
-            self.log.record(Operation {
-                changes: vec![change],
-            });
-        }
+        let manual_before = self.manual.take();
+        let changes = self.set_state(id, HunkState::Applied { from }).into_iter().collect();
+        self.commit(changes, manual_before);
+        self.to_model()
+    }
+
+    /// Keep both sides for one conflict, `first` placed on top (accept-both).
+    pub fn apply_both(&mut self, id: usize, first: Side) -> SessionModel {
+        let manual_before = self.manual.take();
+        let changes = self
+            .set_state(id, HunkState::AppliedBoth { first })
+            .into_iter()
+            .collect();
+        self.commit(changes, manual_before);
         self.to_model()
     }
 
     pub fn revert(&mut self, id: usize) -> SessionModel {
-        if let Some(change) = self.set_state(id, HunkState::Unresolved) {
-            self.log.record(Operation {
-                changes: vec![change],
-            });
-        }
+        let manual_before = self.manual.take();
+        let changes = self.set_state(id, HunkState::Unresolved).into_iter().collect();
+        self.commit(changes, manual_before);
         self.to_model()
     }
 
@@ -289,13 +322,24 @@ impl MergeSession {
             })
             .collect();
 
+        let manual_before = self.manual.take();
         let mut changes = Vec::new();
         for (id, side) in ids {
             if let Some(c) = self.set_state(id, HunkState::Applied { from: side }) {
                 changes.push(c);
             }
         }
-        self.log.record(Operation { changes });
+        self.commit(changes, manual_before);
+        self.to_model()
+    }
+
+    /// Record a free-form manual edit of the entire result document. This becomes
+    /// the authoritative result until a hunk gizmo operation clears it. Consecutive
+    /// edits coalesce into one undo step.
+    pub fn set_full_result(&mut self, text: &str) -> SessionModel {
+        let manual_before = self.manual.clone();
+        self.manual = Some(split_lines(text));
+        self.commit(Vec::new(), manual_before);
         self.to_model()
     }
 
@@ -306,14 +350,16 @@ impl MergeSession {
             let r = h.result_range;
             start < r.end.max(r.start + 1) && end > r.start
         });
-        if let Some(h) = target {
+        let target_id = target.map(|h| h.id);
+        let manual_before = self.manual.take();
+        let mut changes = Vec::new();
+        if let Some(id) = target_id {
             let lines = split_lines(text);
-            if let Some(change) = self.set_state(h.id, HunkState::ManuallyEdited { lines }) {
-                self.log.record(Operation {
-                    changes: vec![change],
-                });
+            if let Some(change) = self.set_state(id, HunkState::ManuallyEdited { lines }) {
+                changes.push(change);
             }
         }
+        self.commit(changes, manual_before);
         self.to_model()
     }
 
@@ -321,6 +367,9 @@ impl MergeSession {
         if let Some(op) = self.log.pop_undo() {
             for c in op.changes.iter().rev() {
                 self.states[c.hunk_id] = c.before.clone();
+            }
+            if let Some(m) = &op.manual {
+                self.manual = m.before.clone();
             }
         }
         self.to_model()
@@ -330,6 +379,9 @@ impl MergeSession {
         if let Some(op) = self.log.pop_redo() {
             for c in &op.changes {
                 self.states[c.hunk_id] = c.after.clone();
+            }
+            if let Some(m) = &op.manual {
+                self.manual = m.after.clone();
             }
         }
         self.to_model()
