@@ -51,6 +51,23 @@ never rely on CI sync alone, or `main` drifts from its tags.
 
 3.1 **Update the changelog** (`CHANGELOG.md`): add a `## vX.Y.Z` section.
 
+3.2 **Run the CI gates locally — BEFORE tagging.** `ci.yml` runs on the `main`
+   push and gates with fmt/clippy/test; a tag that fails these wastes a build and
+   leaves `main` red. Mirror every gate locally first and only proceed when all pass:
+   ```sh
+   cargo test -p mcr-core --all-features
+   cargo fmt -p mcr-core -- --check        # if this fails: `cargo fmt -p mcr-core` then re-stage
+   cargo clippy -p mcr-core -- -D warnings  # fix every warning; -D makes warnings fatal
+   npm --prefix ui run typecheck
+   npm --prefix ui test
+   bash scripts/vendor-neutral-check.sh
+   ```
+   `cargo fmt -- --check` is the one most often missed: rustfmt reformats new
+   multi-line `enum`/`assert!` code, and CI fails on the diff. Run `cargo fmt` and
+   fold the result into the release commit. Note: CI clippy does NOT pass
+   `--all-targets`, so it lints the lib only — don't be alarmed by dead-code
+   warnings in test fixtures from a local `--all-targets` run.
+
 4. **Commit + tag + push:**
    ```sh
    git add src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock CHANGELOG.md
