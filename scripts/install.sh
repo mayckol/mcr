@@ -43,17 +43,75 @@ uninstall() {
   case "$os_raw" in
     Darwin)
       rm -rf "/Applications/MCR.app" 2>/dev/null || true
+      rm -f "$PREFIX/bin/mcr-mergetool" 2>/dev/null || true
       ;;
     Linux)
-      rm -f "$PREFIX/bin/mcr" "$PREFIX/bin/mcr.AppImage" 2>/dev/null || true
+      rm -f "$PREFIX/bin/mcr" "$PREFIX/bin/mcr.AppImage" "$PREFIX/bin/mcr-mergetool" 2>/dev/null || true
       rm -f "$PREFIX/share/applications/mcr.desktop" 2>/dev/null || true
       rm -f "$PREFIX/share/icons/hicolor/256x256/apps/mcr.png" 2>/dev/null || true
       command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$PREFIX/share/applications" >/dev/null 2>&1 || true
       command -v gtk-update-icon-cache  >/dev/null 2>&1 && gtk-update-icon-cache -f "$PREFIX/share/icons/hicolor" >/dev/null 2>&1 || true
       ;;
   esac
+  # Drop the git mergetool registration (leave any non-mcr merge.tool intact).
+  if command -v git >/dev/null 2>&1; then
+    [ "$(git config --global --get merge.tool 2>/dev/null || true)" = mcr ] && git config --global --unset merge.tool 2>/dev/null || true
+    git config --global --remove-section mergetool.mcr 2>/dev/null || true
+  fi
   log "removed MCR."
   exit 0
+}
+
+# Register MCR as a git mergetool. Writes a FOREGROUND shim that hands git's four
+# files to MCR with absolute paths (so the AppImage's chdir-into-mount can't
+# misresolve a relative $MERGED), then points `git mergetool --tool=mcr` at it.
+# $1 = the MCR binary to exec (AppImage on Linux, the .app's Mach-O on macOS).
+install_mergetool() {
+  app_bin="$1"
+  mkdir -p "$PREFIX/bin"
+  shim="$PREFIX/bin/mcr-mergetool"
+
+  cat > "$shim.new" <<'SHIM'
+#!/bin/sh
+# MCR git-mergetool adapter. git invokes:
+#   mcr-mergetool <LOCAL> <BASE> <REMOTE> <MERGED>
+# It MUST run in the foreground and exit with MCR's status, so set
+# `git config mergetool.mcr.trustExitCode true` (the installer does this).
+set -eu
+abspath() {
+  case "$1" in
+    /*) printf '%s\n' "$1" ;;
+    *)  ( cd "$(dirname "$1")" 2>/dev/null && printf '%s/%s\n' "$(pwd)" "$(basename "$1")" ) \
+          || printf '%s/%s\n' "$(pwd)" "$1" ;;
+  esac
+}
+L="${1:-}"; B="${2:-}"; R="${3:-}"; M="${4:-}"
+[ -n "$L" ] && L="$(abspath "$L")"
+[ -n "$B" ] && B="$(abspath "$B")"
+[ -n "$R" ] && R="$(abspath "$R")"
+[ -n "$M" ] && M="$(abspath "$M")"
+exec "@APP@" "$L" "$B" "$R" "$M"
+SHIM
+  # Substitute the real binary path (heredoc is quoted to avoid escaping the shim's
+  # own $-expansions; @APP@ has no shell meaning so a plain sed swap is safe).
+  sed "s#@APP@#${app_bin}#g" "$shim.new" > "$shim.sub" && mv -f "$shim.sub" "$shim.new"
+  chmod +x "$shim.new"
+  mv -f "$shim.new" "$shim"
+  log "mergetool shim: $shim"
+
+  if command -v git >/dev/null 2>&1; then
+    git config --global mergetool.mcr.cmd "\"$shim\" \"\$LOCAL\" \"\$BASE\" \"\$REMOTE\" \"\$MERGED\"" || true
+    git config --global mergetool.mcr.trustExitCode true || true
+    # Don't clobber an existing global merge.tool; only default it when unset.
+    if [ -z "$(git config --global --get merge.tool 2>/dev/null || true)" ]; then
+      git config --global merge.tool mcr || true
+      log "set global merge.tool=mcr — run: git mergetool"
+    else
+      log "kept merge.tool=$(git config --global --get merge.tool) — run: git mergetool --tool=mcr"
+    fi
+  else
+    log "git not found — skipped mergetool registration (shim still installed)"
+  fi
 }
 
 [ "$ACTION" = uninstall ] && uninstall
@@ -93,6 +151,7 @@ case "$os_raw" in
     xattr -dr com.apple.quarantine /Applications/MCR.app 2>/dev/null || true
     log "installed: /Applications/MCR.app"
     log "first launch: right-click → Open (unsigned build)"
+    install_mergetool "/Applications/MCR.app/Contents/MacOS/MCR"
     ;;
   Linux)
     case "$arch_raw" in x86_64|amd64) : ;; *) fail "Linux build is x86_64 only; got $arch_raw" ;; esac
@@ -152,6 +211,7 @@ EOF
     command -v gtk-update-icon-cache  >/dev/null 2>&1 && gtk-update-icon-cache -f "$PREFIX/share/icons/hicolor" >/dev/null 2>&1 || true
 
     log "menu entry: $APPS_DIR/mcr.desktop"
+    install_mergetool "$APP"
     case ":$PATH:" in *":$BIN_DIR:"*) : ;; *) log "add $BIN_DIR to your PATH" ;; esac
     ;;
   *) fail "unsupported OS: $os_raw" ;;
