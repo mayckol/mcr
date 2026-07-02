@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.1
+
+- Bottom action bar: **Accept Left** / **Accept Right** apply all non-conflicting
+  changes from a side; **Apply** writes the result and finishes, **Cancel** aborts.
+- Semantic band colors — green = a change you can safely accept, yellow = a
+  conflict you must pick a side for, red = a deletion; gutter and content tint now
+  share one source so a row never stripes gutter-vs-content.
+- Opening a file jumps the result pane to its first change and focuses the editor.
+- Hunk gizmos fire on mousedown (the layer is rebuilt on every geometry refresh);
+  apply arrows hide once a side is applied; the gizmo stays inside the visible band.
+- `scrollbar-gutter: stable` keeps content width steady as the scrollbar appears.
+- `git mergetool` registration: the installer writes an absolute-path foreground
+  shim and registers `merge.tool=mcr` (without clobbering an existing tool).
+- Tokyo Night: enkia keyword purple and teal/cyan type + property accents.
+
 ## v0.2.0
 
 - Multi-file merge: `git mergetool` now opens one window listing every conflicted
