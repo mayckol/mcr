@@ -26,7 +26,10 @@ function midY(view: EditorView, startLine: number, endLine: number, offY: number
   }
   const pr = view.scrollDOM.getBoundingClientRect();
   if (bottom <= pr.top || top >= pr.bottom) return null;
-  return (top + bottom) / 2 - offY;
+  // Clamp to the pane's visible band (+10px for the button's own half-height) so a
+  // hunk scrolled partly above never floats the gizmo over the column header/top bar.
+  const mid = Math.min(Math.max((top + bottom) / 2, pr.top + 10), pr.bottom - 10);
+  return mid - offY;
 }
 
 // Clickable apply/revert affordances anchored to live hunk geometry (FR-007/008).
@@ -55,7 +58,11 @@ export class ControlsLayer {
       top: `${y - 10}px`,
       pointerEvents: "auto",
     });
-    btn.addEventListener("click", (e) => {
+    // Fire on mousedown, not click: the host is wiped+rebuilt on every geometry
+    // refresh, so a stray tick between mousedown and mouseup would eat a `click`.
+    // preventDefault stops focus-steal from the editable result pane (which itself
+    // triggers a refresh that swaps this element out mid-gesture).
+    btn.addEventListener("mousedown", (e) => {
       e.preventDefault();
       onClick();
     });
@@ -73,6 +80,10 @@ export class ControlsLayer {
       const isConflict = h.category === "conflicting";
       const appliedFrom = h.state.kind === "applied" ? h.state.from : null;
       const showRevert = h.state.kind === "applied" || h.state.kind === "applied_both";
+      // A plain apply arrow only makes sense while the hunk is still open; once a
+      // side is applied (or both are), the arrows hide and only revert (×) remains.
+      // `rejected` after an undo returns to the open state, so the arrows reappear.
+      const open = h.state.kind === "unresolved" || h.state.kind === "rejected";
       const showLocal = h.origin === "local" || h.origin === "both" || isConflict;
       const showIncoming = h.origin === "incoming" || h.origin === "both" || isConflict;
 
@@ -82,7 +93,7 @@ export class ControlsLayer {
         // Incoming already applied → left becomes "append local after right".
         if (y !== null && isConflict && appliedFrom === "incoming") {
           this.button("»+", x, y, "Append left after right", () => this.cb.acceptBoth(h.id, "incoming"));
-        } else if (y !== null) {
+        } else if (y !== null && open) {
           this.button("»", x, y, "Apply from left", () => this.cb.applyLocal(h.id));
         }
       }
@@ -92,7 +103,7 @@ export class ControlsLayer {
         // Local already applied → right becomes "append right after left".
         if (y !== null && isConflict && appliedFrom === "local") {
           this.button("«+", x, y, "Append right after left", () => this.cb.acceptBoth(h.id, "local"));
-        } else if (y !== null) {
+        } else if (y !== null && open) {
           this.button("«", x, y, "Apply from right", () => this.cb.applyIncoming(h.id));
         }
       }

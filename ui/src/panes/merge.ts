@@ -46,10 +46,15 @@ function makeView(
         }),
         EditorView.theme({
           "&": { height: "100%" },
-          // `overlay` floats the scrollbar over the content (WebKit/WKWebView) so
-          // the line band paints full-width *under* it instead of stopping at a
-          // reserved gutter. Degrades to `auto` where overlay is unsupported.
-          ".cm-scroller": { overflow: "overlay", fontFamily: "ui-monospace, monospace" },
+          // `scrollbar-gutter: stable` reserves the scrollbar track up front so the
+          // content width never jumps when the vertical bar appears/disappears
+          // (`overflow: overlay` no longer floats reliably in the webview, so the
+          // 12px bar was stealing content width only while present).
+          ".cm-scroller": {
+            overflow: "auto",
+            scrollbarGutter: "stable",
+            fontFamily: "ui-monospace, monospace",
+          },
         }),
       ],
     }),

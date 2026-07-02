@@ -8,7 +8,15 @@ import { Shortcuts } from "./shortcuts/keymap";
 import { ShortcutsPanel } from "./shortcuts/panel";
 import { FileList } from "./files/list";
 import { ExitConfirmModal } from "./confirm/modal";
+import { CATEGORY_COLORS } from "./highlight/theme";
 import type { SessionModel, SessionSummary, SessionProgress, Side } from "./ipc/types";
+
+// Mirror the change-band palette into CSS vars so the gutter tint (styled in CSS)
+// always equals the content band (styled inline from the same source) — a row can
+// never be gutter-yellow / content-red. One source of truth: CATEGORY_COLORS.
+for (const [cat, c] of Object.entries(CATEGORY_COLORS)) {
+  document.documentElement.style.setProperty(`--band-${cat}`, c.band);
+}
 
 const inTauri = "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
 
@@ -74,6 +82,28 @@ function apply(next: SessionModel) {
   setTimeout(scheduleRefresh, 250);
 }
 
+// On first opening a file, jump the result pane to its earliest change and focus
+// the editor, so review starts at the first hunk instead of the top of the file.
+// Called only on fresh loads — never after a mutation, which would yank the view.
+function focusFirstChange() {
+  if (!model || model.hunks.length === 0) return;
+  const first = model.hunks.reduce((a, b) =>
+    b.result_range.start < a.result_range.start ? b : a
+  );
+  currentHunk = first.id;
+  // Defer past the webview's font/layout measurement (same reason apply() re-runs
+  // scheduleRefresh on a delay); scrolling before layout settles snaps to the top.
+  const go = () => {
+    if (!model) return;
+    const doc = merge.result.state.doc;
+    const line = doc.line(Math.min(first.result_range.start + 1, doc.lines));
+    merge.result.focus();
+    merge.result.dispatch({ selection: { anchor: line.from }, scrollIntoView: true });
+  };
+  requestAnimationFrame(go);
+  setTimeout(go, 120);
+}
+
 async function mutate(fn: (sessionId: string) => Promise<SessionModel>): Promise<SessionModel> {
   if (!inTauri || !model) return model as SessionModel; // demo: backend is a no-op
   return fn(model.session_id);
@@ -81,10 +111,14 @@ async function mutate(fn: (sessionId: string) => Promise<SessionModel>): Promise
 
 function act(fn: () => Promise<SessionModel>) {
   if (!model) return;
-  fn().then(async (next) => {
-    apply(next);
-    await afterMutate(next);
-  });
+  fn()
+    .then(async (next) => {
+      apply(next);
+      await afterMutate(next);
+    })
+    .catch((e) => {
+      $("status").textContent = `Action failed: ${e}`;
+    });
 }
 
 // After a mutation: in a multi-file session, persist a file the moment it is fully
@@ -165,8 +199,11 @@ function showFileList(on: boolean) {
 async function selectFile(id: string) {
   const summary = files.find((f) => f.session_id === id);
   activeFile = id;
-  if (summary && summary.kind !== "text") {
-    $("status").textContent = `${summary.path_label}: ${summary.kind} conflict — use Accept Local / Incoming`;
+  // Binary blobs cannot be shown as text — they stay accept-only. Text, both-added
+  // and delete/modify all reconstruct as text sides, so they open in the editor:
+  // a deleted side renders as an empty (black) pane against the other side's diff.
+  if (summary && summary.kind === "binary") {
+    $("status").textContent = `${summary.path_label}: binary conflict — use Accept Ours / Theirs`;
     fileList.render(files, activeFile, progress);
     return;
   }
@@ -175,6 +212,7 @@ async function selectFile(id: string) {
       const m = await ipc.selectSession(id);
       merge.setLanguage(basename(summary?.path_label));
       apply(m);
+      focusFirstChange();
     } catch (e) {
       $("status").textContent = `Open failed: ${e}`;
     }
@@ -250,13 +288,17 @@ new ResizeObserver(scheduleRefresh).observe(container);
 window.addEventListener("resize", scheduleRefresh);
 if (document.fonts?.ready) document.fonts.ready.then(scheduleRefresh);
 
-// Merge-tool controls: write the result to Git's MERGED file and exit 0, or
-// abort with a non-zero status that tells Git the merge was not resolved.
-$("save-exit").addEventListener("click", () => exitFlow(false));
-$("abort").addEventListener("click", () => exitFlow(true));
+// Footer action bar. Accept Left/Right apply all non-conflicting changes from a
+// side; Apply writes the result to Git's MERGED file and exits 0; Cancel aborts
+// with a non-zero status that tells Git the merge was not resolved.
+$("foot-accept-left").addEventListener("click", actions.applyLeft);
+$("foot-accept-right").addEventListener("click", actions.applyRight);
+$("foot-apply").addEventListener("click", () => exitFlow(false));
+$("foot-cancel").addEventListener("click", () => exitFlow(true));
 
 function setMergeToolMode(on: boolean) {
   $("merge-actions").style.display = on ? "flex" : "none";
+  $("footbar").style.display = on ? "flex" : "none";
 }
 
 async function boot() {
@@ -276,6 +318,7 @@ async function boot() {
         activeFile = b.active.session_id;
         merge.setLanguage(b.file_name);
         apply(b.active);
+        focusFirstChange();
       } else {
         // More than one file: show the list first, no editor yet (FR-001).
         renderStatus();
@@ -284,10 +327,12 @@ async function boot() {
       setMergeToolMode(false);
       const demo = demoModel();
       apply(await ipc.openSession({ local: demo.localText, ancestor: demo.ancestorText, incoming: demo.incomingText }));
+      focusFirstChange();
     }
   } else {
     setMergeToolMode(false);
     apply(demoModel().model);
+    focusFirstChange();
   }
 }
 boot();

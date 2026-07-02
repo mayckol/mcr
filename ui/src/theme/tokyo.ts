@@ -15,8 +15,12 @@ export const TOKYO = {
   red: "#f7768e",
   yellow: "#e0af68",
   orange: "#ff9e64",
-  purple: "#bb9af7",
+  // Keyword purple matches the enkia "Tokyo Night" editor theme (#9d7cd8), not the
+  // lighter magenta (#bb9af7) some ports use — kept separately for markup accents.
+  purple: "#9d7cd8",
+  magenta: "#bb9af7",
   cyan: "#7dcfff",
+  teal: "#2ac3de",
 };
 
 // Dark editor theme so gutters, line numbers, cursor, and selection are themed

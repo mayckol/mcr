@@ -14,6 +14,13 @@
   --scroll-thumb-hover: #3d4673;
   --scroll-thumb-active: var(--accent);
   --scroll-track: transparent;
+
+  /* Change-band tints. Fallbacks here; main.ts overwrites them from
+     CATEGORY_COLORS so the gutter and the content band share one source. */
+  --band-added: rgba(158, 206, 106, 0.18);
+  --band-removed: rgba(247, 118, 142, 0.18);
+  --band-modified: rgba(158, 206, 106, 0.18);
+  --band-conflicting: rgba(224, 175, 104, 0.18);
 }
 
 * { box-sizing: border-box; }
@@ -73,6 +80,34 @@ body { display: flex; flex-direction: column; }
 }
 .toolbar button:hover { border-color: var(--accent); }
 
+/* Bottom action bar — accept-per-side on the left, finish/cancel on the right. */
+.footbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-soft);
+  border-top: 1px solid var(--border);
+}
+.footbar .foot-group { display: flex; gap: 8px; }
+.footbar button {
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 14px;
+  cursor: pointer;
+}
+.footbar button:hover { border-color: var(--accent); }
+.footbar button.primary {
+  background: var(--accent);
+  color: #0d1117;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.footbar button.primary:hover { filter: brightness(1.1); }
+
 .merge {
   position: relative;
   flex: 1;
@@ -99,7 +134,6 @@ body { display: flex; flex-direction: column; }
 }
 .pane:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .cm-editor { height: 100%; }
@@ -112,10 +146,10 @@ body { display: flex; flex-direction: column; }
 .mcr-word { border-radius: 2px; }
 
 /* Gutter (line-number column) shares the change tint, overlapping the editor. */
-.cm-gutterElement.mcr-g-added { background: rgba(158, 206, 106, 0.20); }
-.cm-gutterElement.mcr-g-removed { background: rgba(247, 118, 142, 0.20); }
-.cm-gutterElement.mcr-g-modified { background: rgba(122, 162, 247, 0.20); }
-.cm-gutterElement.mcr-g-conflicting { background: rgba(224, 175, 104, 0.14); }
+.cm-gutterElement.mcr-g-added { background: var(--band-added); }
+.cm-gutterElement.mcr-g-removed { background: var(--band-removed); }
+.cm-gutterElement.mcr-g-modified { background: var(--band-modified); }
+.cm-gutterElement.mcr-g-conflicting { background: var(--band-conflicting); }
 .cm-gutterElement.mcr-g-resolved { opacity: 0.7; }
 
 .mcr-gizmo {

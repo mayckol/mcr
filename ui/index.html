@@ -29,8 +29,6 @@
       <button id="shortcuts" title="Keyboard shortcuts">⌨</button>
       <span id="merge-actions" class="merge-actions" style="display:none">
         <button id="next-file" title="Next unresolved file" style="display:none">⇥ Next file</button>
-        <button id="save-exit" class="primary" title="Write result to MERGED and exit">Save &amp; Exit</button>
-        <button id="abort" title="Abort the merge (non-zero exit)">Abort</button>
       </span>
       <span id="status" class="status"></span>
     </header>
@@ -43,6 +41,17 @@
         <section class="col"><div class="col-title">Incoming</div><div id="pane-incoming" class="pane"></div></section>
       </div>
     </div>
+
+    <footer id="footbar" class="footbar" style="display:none">
+      <div class="foot-group">
+        <button id="foot-accept-left" title="Apply all non-conflicting changes from the left">Accept Left</button>
+        <button id="foot-accept-right" title="Apply all non-conflicting changes from the right">Accept Right</button>
+      </div>
+      <div class="foot-group">
+        <button id="foot-cancel" title="Abort the merge (non-zero exit)">Cancel</button>
+        <button id="foot-apply" class="primary" title="Write the resolved result and finish">Apply</button>
+      </div>
+    </footer>
 
     <script type="module" src="/src/main.ts"></script>
   </body>
