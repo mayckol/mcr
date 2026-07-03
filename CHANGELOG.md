@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.3.1
+
+- **Compare redesigned**: `mcr diff <branch|commit>` now compares one ref
+  against your **working tree**, side by side — the ref on the left, your
+  editable current file on the right. Hunks start unresolved (the right pane
+  opens as your file, untouched); the `»` gizmos pull the ref's changes into
+  your code. Save writes the working tree, never stages. The old two-ref form
+  (`mcr diff A B`) is gone; the second positional is now the optional repo dir
+  anchor. File statuses read ref → worktree (A = only in your tree, D = only at
+  the ref).
+- **File tree**: the sidebar groups files into collapsible folders, IDE-style —
+  single-child directory chains compress into one node (`a/b/c`), folders show
+  their file count, rows show basenames (full path on hover).
+- **Change navigation crosses files**: `↓` on a file's last change continues at
+  the first change of the next file (wrapping around the list); `↑` mirrors it
+  backwards, landing on the previous file's last change.
+
 ## v0.3.0
 
 - **Compare mode**: `mcr diff <refA> <refB>` opens a three-pane view — refA |
