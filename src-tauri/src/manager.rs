@@ -1033,7 +1033,9 @@ mod tests {
         assert_eq!(model.panes.local.join("\n"), "new\n");
         assert_eq!(model.panes.result.join("\n"), "");
 
-        // gone.txt exists in the worktree but not at `feature`.
+        // gone.txt exists in the worktree but not at `feature`. Compare against
+        // the actual on-disk bytes: on Windows CI, autocrlf checkouts write CRLF,
+        // and the pane must mirror the worktree exactly either way.
         let gone = discovery::ChangedFile {
             status: "A".into(),
             path: "gone.txt".into(),
@@ -1041,7 +1043,9 @@ mod tests {
         };
         let model = m.open_compare_entry(&root, &gone, &feature).unwrap();
         assert_eq!(model.panes.local.join("\n"), "");
-        assert_eq!(model.panes.result.join("\n"), "keep\n");
+        let on_disk = String::from_utf8(std::fs::read(dir.join("gone.txt")).unwrap()).unwrap();
+        assert!(on_disk.starts_with("keep"), "on_disk = {on_disk:?}");
+        assert_eq!(model.panes.result.join("\n"), on_disk);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
