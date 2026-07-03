@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.3.2
+
+- **Compare opens instantly on big diffs.** File sessions now build lazily on
+  first selection instead of paying one `git show` + diff + full model build per
+  changed file at launch; list/progress refreshes poll a cheap status counter
+  instead of rebuilding every open session's model. A 300-file diff that took
+  seconds now paints immediately.
+
 ## v0.3.1
 
 - **Compare redesigned**: `mcr diff <branch|commit>` now compares one ref
