@@ -42,15 +42,17 @@ function build(view: EditorView, pane: PaneName, hunks: ChangeRegion[]): Decorat
 
   for (const h of hunks) {
     if (!participates(h, pane)) continue;
+    // A resolved change drops its fill entirely; the connector overlay outlines
+    // where it was with a dotted border instead (accept = ghost, not a filled band).
+    if (isResolved(h)) continue;
     const { start, end } = rangeFor(h, pane);
     const colors = CATEGORY_COLORS[h.category];
-    const dim = isResolved(h) ? " mcr-resolved" : "";
     for (let ln = start; ln < end && ln < docLines; ln++) {
       const line = view.state.doc.line(ln + 1);
       decos.push(
         Decoration.line({
           attributes: {
-            class: `mcr-band mcr-${h.category}${dim}`,
+            class: `mcr-band mcr-${h.category}`,
             style: `background:${colors.band}`,
           },
         }).range(line.from)
@@ -94,11 +96,11 @@ function buildGutter(view: EditorView, pane: PaneName, hunks: ChangeRegion[]): R
   const ordered = [...hunks].sort((a, b) => rangeFor(a, pane).start - rangeFor(b, pane).start);
   for (const h of ordered) {
     if (!participates(h, pane)) continue;
+    if (isResolved(h)) continue;
     const { start, end } = rangeFor(h, pane);
-    const dim = isResolved(h) ? " mcr-g-resolved" : "";
     for (let ln = start; ln < end && ln < docLines; ln++) {
       const line = view.state.doc.line(ln + 1);
-      builder.add(line.from, line.from, new BandGutterMarker(`mcr-g mcr-g-${h.category}${dim}`));
+      builder.add(line.from, line.from, new BandGutterMarker(`mcr-g mcr-g-${h.category}`));
     }
   }
   return builder.finish();

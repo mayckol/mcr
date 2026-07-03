@@ -91,6 +91,17 @@ export class ConnectorOverlay {
       const hasLocal = conflict || h.origin === "local" || h.origin === "both";
       const hasIncoming = conflict || h.origin === "incoming" || h.origin === "both";
 
+      // A resolved change carries no fill and no ribbon — a dotted outline marks
+      // where each side's band used to be, so the accepted region reads as a ghost.
+      if (!strong) {
+        // Span the full pane width (scroller edge to edge, scrollbar rail included)
+        // so the ghost matches the filled band's reach rather than stopping short.
+        if (hasLocal) this.outline(this.left, h.local_range, lr.left - cr.left, lr.right - cr.left, h.category, cr.top);
+        this.outline(this.result, h.result_range, rr.left - cr.left, rr.right - cr.left, h.category, cr.top);
+        if (hasIncoming) this.outline(this.right, h.incoming_range, ir.left - cr.left, ir.right - cr.left, h.category, cr.top);
+        continue;
+      }
+
       // Outer-rail caps first, so the connector ribbons paint over them. Cap a side
       // only when it is banded (it participated in the change) — an unbanded side
       // would otherwise get a stray tint in its scrollbar rail.
@@ -120,6 +131,34 @@ export class ConnectorOverlay {
         }
       }
     }
+  }
+
+  // Dotted outline around a resolved hunk's line range in one pane — the ghost of
+  // a change that no longer carries a fill. No-op for an empty range (e.g. the
+  // deleted side of a removal) or when the range is off-screen.
+  private outline(
+    view: EditorView,
+    range: LineRange,
+    xLeft: number,
+    xRight: number,
+    cat: ChangeRegion["category"],
+    offY: number
+  ) {
+    if (range.end <= range.start || xRight <= xLeft) return;
+    const e = edge(view, range);
+    if (!e) return;
+    const rect = document.createElementNS(SVG_NS, "rect");
+    rect.setAttribute("x", String(xLeft + 0.5));
+    rect.setAttribute("y", String(e.top - offY + 0.5));
+    rect.setAttribute("width", String(xRight - xLeft - 1));
+    rect.setAttribute("height", String(e.bottom - e.top - 1));
+    rect.setAttribute("rx", "3");
+    rect.style.fill = "none";
+    rect.style.stroke = CATEGORY_COLORS[cat].connector;
+    rect.style.strokeWidth = "1";
+    rect.style.strokeDasharray = "2 3";
+    rect.style.strokeOpacity = "0.6";
+    this.svg.appendChild(rect);
   }
 
   // Fill a pane's reserved scrollbar rail with the band tint across a hunk's line
