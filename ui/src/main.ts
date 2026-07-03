@@ -254,7 +254,10 @@ async function selectFile(id: string, edge: "first" | "last" = "first") {
       apply(m);
       focusEdgeChange(edge);
     } catch (e) {
-      $("status").textContent = `Open failed: ${e}`;
+      // Compare sessions build lazily; a file can turn out binary only here.
+      $("status").textContent = `${summary?.path_label ?? "file"}: ${e}`;
+      await refreshList();
+      return;
     }
   }
   fileList.render(files, activeFile, progress);

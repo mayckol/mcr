@@ -87,6 +87,12 @@ struct RepoCtx {
     keep_backup: bool,
 }
 
+#[derive(Clone)]
+struct CompareCtx {
+    root: String,
+    refspec: String,
+}
+
 /// Framework-agnostic session store. Holds all open merge sessions and forwards
 /// intents to `mcr-core`. Kept free of Tauri types so it is unit-testable.
 #[derive(Default)]
@@ -100,6 +106,11 @@ pub struct SessionManager {
     /// exit code so an unresolved file is never reported resolved).
     git_passed: Mutex<Option<String>>,
     counter: Mutex<u64>,
+    /// Compare launch context + files whose sessions haven't been built yet.
+    /// Sessions materialize on first selection — opening a big diff must not pay
+    /// one `git show` + diff per file up front.
+    compare_ctx: Mutex<Option<CompareCtx>>,
+    compare_pending: Mutex<HashMap<String, discovery::ChangedFile>>,
 }
 
 fn canonical(path: &str) -> String {
@@ -231,67 +242,106 @@ impl SessionManager {
         model
     }
 
-    /// Open one compared file: local = blob at the ref, base = incoming = the
-    /// current worktree content — so the result projection IS the working file
-    /// and every hunk is a place the ref differs from it (apply pulls the ref's
-    /// version in). Binary (or non-UTF8) files are listed but get no session.
-    /// Returns the model for text files.
-    pub fn open_compare_entry(
-        &self,
-        root: &str,
-        file: &discovery::ChangedFile,
-        refspec: &str,
-    ) -> Option<SessionModel> {
-        let path_at_ref = file.old_path.as_deref().unwrap_or(&file.path);
-        let ref_bytes = discovery::ref_blob(root, refspec, path_at_ref);
-        let worktree_path = std::path::Path::new(root)
+    /// Record the compare launch context (repo root + the ref compared against).
+    pub fn set_compare_ctx(&self, root: &str, refspec: &str) {
+        *self.compare_ctx.lock().unwrap() = Some(CompareCtx {
+            root: root.to_string(),
+            refspec: refspec.to_string(),
+        });
+    }
+
+    /// List one compared file WITHOUT any IO — no blob fetch, no diff. The
+    /// session materializes on first selection (`model`), so a launch with many
+    /// changed files opens instantly.
+    pub fn register_compare_entry(&self, file: &discovery::ChangedFile) -> String {
+        let root = self
+            .compare_ctx
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|c| c.root.clone())
+            .unwrap_or_default();
+        let worktree_path = std::path::Path::new(&root)
             .join(&file.path)
             .to_string_lossy()
             .into_owned();
-        let worktree_bytes = std::fs::read(&worktree_path).unwrap_or_default();
-
         let label = match &file.old_path {
             Some(old) => format!("{old} → {}", file.path),
             None => file.path.clone(),
         };
         let id = self.next_id();
-        let binary =
-            discovery::blob_is_binary(&ref_bytes) || discovery::blob_is_binary(&worktree_bytes);
-
-        let (kind, model) = if binary {
-            (ConflictKind::Binary, None)
-        } else {
-            let current = String::from_utf8_lossy(&worktree_bytes).into_owned();
-            // open_unapplied: the ref's changes start unresolved, so the editable
-            // pane IS the current file until the user pulls a hunk in.
-            let session = MergeSession::open_unapplied(
-                id.clone(),
-                &String::from_utf8_lossy(&ref_bytes),
-                &current,
-                &current,
-                WhitespaceMode::None,
-            );
-            let model = session.to_model();
-            self.sessions.lock().unwrap().insert(id.clone(), session);
-            self.merged_paths
-                .lock()
-                .unwrap()
-                .insert(id.clone(), worktree_path.clone());
-            (ConflictKind::Text, Some(model))
-        };
         self.entries.lock().unwrap().insert(
             id.clone(),
             MergeFileEntry {
                 path_label: label,
                 worktree_path,
-                kind,
+                kind: ConflictKind::Text,
                 resolved: false,
                 accepted_raw: false,
                 change_status: Some(file.status.clone()),
             },
         );
-        self.order.lock().unwrap().push(id);
-        model
+        self.compare_pending
+            .lock()
+            .unwrap()
+            .insert(id.clone(), file.clone());
+        self.order.lock().unwrap().push(id.clone());
+        id
+    }
+
+    /// Build the session for a lazily-registered compare file: local = blob at
+    /// the ref, base = incoming = the current worktree content — so the result
+    /// projection IS the working file and every hunk is a place the ref differs
+    /// from it (apply pulls the ref's version in). Binary (or non-UTF8) files
+    /// flip their entry to `Binary` and never get a session.
+    fn materialize_compare(&self, session_id: &str) -> Result<(), String> {
+        if self.sessions.lock().unwrap().contains_key(session_id) {
+            return Ok(());
+        }
+        let Some(file) = self.compare_pending.lock().unwrap().remove(session_id) else {
+            return Ok(()); // not a compare entry — nothing to build
+        };
+        let ctx = self
+            .compare_ctx
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| "no compare context".to_string())?;
+
+        let path_at_ref = file.old_path.as_deref().unwrap_or(&file.path);
+        let ref_bytes = discovery::ref_blob(&ctx.root, &ctx.refspec, path_at_ref);
+        let worktree_path = std::path::Path::new(&ctx.root)
+            .join(&file.path)
+            .to_string_lossy()
+            .into_owned();
+        let worktree_bytes = std::fs::read(&worktree_path).unwrap_or_default();
+
+        if discovery::blob_is_binary(&ref_bytes) || discovery::blob_is_binary(&worktree_bytes) {
+            if let Some(e) = self.entries.lock().unwrap().get_mut(session_id) {
+                e.kind = ConflictKind::Binary;
+            }
+            return Err("binary file — cannot compare as text".to_string());
+        }
+
+        let current = String::from_utf8_lossy(&worktree_bytes).into_owned();
+        // open_unapplied: the ref's changes start unresolved, so the editable
+        // pane IS the current file until the user pulls a hunk in.
+        let session = MergeSession::open_unapplied(
+            session_id.to_string(),
+            &String::from_utf8_lossy(&ref_bytes),
+            &current,
+            &current,
+            WhitespaceMode::None,
+        );
+        self.sessions
+            .lock()
+            .unwrap()
+            .insert(session_id.to_string(), session);
+        self.merged_paths
+            .lock()
+            .unwrap()
+            .insert(session_id.to_string(), worktree_path);
+        Ok(())
     }
 
     fn entry_resolved(&self, session_id: &str) -> bool {
@@ -311,7 +361,7 @@ impl SessionManager {
             .lock()
             .unwrap()
             .get(session_id)
-            .map(|s| s.to_model().status.fully_resolved)
+            .map(|s| s.resolution_status().fully_resolved)
             .unwrap_or(false)
     }
 
@@ -323,7 +373,7 @@ impl SessionManager {
             .lock()
             .unwrap()
             .get(session_id)
-            .map(|s| s.to_model().status.remaining_conflicts)
+            .map(|s| s.resolution_status().remaining_conflicts)
             .unwrap_or(0);
         let resolved = entry.resolved || (entry.kind == ConflictKind::Text && remaining == 0);
         Some(SessionSummary {
@@ -395,8 +445,10 @@ impl SessionManager {
         }
     }
 
-    /// Read-only model for an already-open session (file selection).
+    /// Read-only model for a session (file selection). Lazily-registered compare
+    /// files build their session on first call.
     pub fn model(&self, session_id: &str) -> Result<SessionModel, String> {
+        self.materialize_compare(session_id)?;
         self.sessions
             .lock()
             .unwrap()
@@ -978,7 +1030,9 @@ mod tests {
             path: "f.txt".into(),
             old_path: None,
         };
-        let model = m.open_compare_entry(&root, &f, &feature).unwrap();
+        m.set_compare_ctx(&root, &feature);
+        let id = m.register_compare_entry(&f);
+        let model = m.model(&id).unwrap();
         // The editable pane starts as the CURRENT worktree content; the left pane
         // is the ref's version.
         assert_eq!(model.panes.result.join("\n"), "one\nworktree\nthree\n");
@@ -1029,7 +1083,8 @@ mod tests {
             path: "added.txt".into(),
             old_path: None,
         };
-        let model = m.open_compare_entry(&root, &added, &feature).unwrap();
+        m.set_compare_ctx(&root, &feature);
+        let model = m.model(&m.register_compare_entry(&added)).unwrap();
         assert_eq!(model.panes.local.join("\n"), "new\n");
         assert_eq!(model.panes.result.join("\n"), "");
 
@@ -1041,7 +1096,7 @@ mod tests {
             path: "gone.txt".into(),
             old_path: None,
         };
-        let model = m.open_compare_entry(&root, &gone, &feature).unwrap();
+        let model = m.model(&m.register_compare_entry(&gone)).unwrap();
         assert_eq!(model.panes.local.join("\n"), "");
         let on_disk = String::from_utf8(std::fs::read(dir.join("gone.txt")).unwrap()).unwrap();
         assert!(on_disk.starts_with("keep"), "on_disk = {on_disk:?}");
@@ -1072,12 +1127,49 @@ mod tests {
             path: "blob.bin".into(),
             old_path: None,
         };
-        assert!(m.open_compare_entry(&root, &f, "bin").is_none());
+        m.set_compare_ctx(&root, "bin");
+        let id = m.register_compare_entry(&f);
+        let err = m.model(&id).unwrap_err();
+        assert!(err.contains("binary"), "err = {err}");
         let summaries = m.summaries();
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].kind, ConflictKind::Binary);
         assert_eq!(summaries[0].change_status.as_deref(), Some("D"));
         assert!(m.model(&summaries[0].session_id).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compare_sessions_materialize_lazily() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("mcr-cmp-lazy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (_main, feature) = setup_compare_repo(&dir);
+        let root = dir.to_string_lossy().into_owned();
+
+        let m = SessionManager::new();
+        m.set_compare_ctx(&root, &feature);
+        let ids: Vec<String> = ["f.txt", "added.txt", "gone.txt"]
+            .iter()
+            .map(|p| {
+                m.register_compare_entry(&discovery::ChangedFile {
+                    status: "M".into(),
+                    path: p.to_string(),
+                    old_path: None,
+                })
+            })
+            .collect();
+
+        // Registration lists all files but builds no sessions (no IO paid yet).
+        assert_eq!(m.summaries().len(), 3);
+        assert!(m.sessions.lock().unwrap().is_empty());
+
+        // Selecting one file materializes exactly that session.
+        m.model(&ids[0]).unwrap();
+        assert_eq!(m.sessions.lock().unwrap().len(), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -33,14 +33,20 @@ pub fn bootstrap(mgr: Mgr, launch: State<Launch>) -> Result<Bootstrap, String> {
     // Compare launch: no repo ctx (staging/backup stay inert) and no git-passed
     // file (exit code stays 0 — compare has no mergetool contract).
     if let (Some(root), Some(cmp)) = (&launch.repo_root, &launch.compare) {
+        mgr.set_compare_ctx(root, &cmp.refspec);
+        // Register only — sessions build lazily on selection, so a launch with
+        // hundreds of changed files stays instant.
+        let ids: Vec<String> = cmp
+            .files
+            .iter()
+            .map(|f| mgr.register_compare_entry(f))
+            .collect();
         let mut single_model = None;
         let mut active_label = None;
-        let single = cmp.files.len() == 1;
-        for f in &cmp.files {
-            let model = mgr.open_compare_entry(root, f, &cmp.refspec);
-            if single {
-                active_label = Some(f.path.clone());
-                single_model = model;
+        if cmp.files.len() == 1 {
+            single_model = mgr.model(&ids[0]).ok();
+            if single_model.is_some() {
+                active_label = Some(cmp.files[0].path.clone());
             }
         }
         return Ok(Bootstrap {

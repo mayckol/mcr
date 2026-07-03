@@ -216,16 +216,6 @@ impl MergeSession {
             }
         }
 
-        let remaining_conflicts = self
-            .changes
-            .iter()
-            .enumerate()
-            .filter(|(id, m)| {
-                m.category == Category::Conflicting
-                    && matches!(self.states[*id], HunkState::Unresolved)
-            })
-            .count();
-
         SessionModel {
             session_id: self.id.clone(),
             panes: Panes {
@@ -235,11 +225,27 @@ impl MergeSession {
             },
             alignment: align,
             hunks,
-            status: ResolutionStatus {
-                total_hunks: self.changes.len(),
-                remaining_conflicts,
-                fully_resolved: remaining_conflicts == 0,
-            },
+            status: self.resolution_status(),
+        }
+    }
+
+    /// The resolution counters alone — O(#hunks) over the state table, without
+    /// building panes, alignment rows, or word spans. List/progress refreshes
+    /// poll every open session, so they must not pay `to_model` costs.
+    pub fn resolution_status(&self) -> ResolutionStatus {
+        let remaining_conflicts = self
+            .changes
+            .iter()
+            .enumerate()
+            .filter(|(id, m)| {
+                m.category == Category::Conflicting
+                    && matches!(self.states[*id], HunkState::Unresolved)
+            })
+            .count();
+        ResolutionStatus {
+            total_hunks: self.changes.len(),
+            remaining_conflicts,
+            fully_resolved: remaining_conflicts == 0,
         }
     }
 
