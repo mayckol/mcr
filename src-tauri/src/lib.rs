@@ -6,15 +6,12 @@ use manager::{CompareSpec, DiscoveredFile, Launch, MergeFiles, SessionManager};
 
 /// What the command line asked for. Stable CLI contract (editors/IDEs drive it):
 /// `mcr <LOCAL> <BASE> <REMOTE> <MERGED>` (git mergetool) or
-/// `mcr diff <refA> <refB> [dir]` (compare two refs; `dir` anchors the repo for
-/// launchers that cannot preserve the caller's CWD, e.g. the AppImage wrapper).
+/// `mcr diff <ref> [dir]` (compare a branch/commit against the working tree;
+/// `dir` anchors the repo for launchers that cannot preserve the caller's CWD,
+/// e.g. the AppImage wrapper).
 enum ParsedArgs {
     Mergetool(MergeFiles),
-    Compare {
-        ref_a: String,
-        ref_b: String,
-        dir: Option<String>,
-    },
+    Compare { refspec: String, dir: Option<String> },
     CompareUsage,
     Demo,
 }
@@ -23,10 +20,9 @@ fn classify_args(args: &[String]) -> ParsedArgs {
     if args.first().map(String::as_str) == Some("diff") {
         let rest = &args[1..];
         return match rest.len() {
-            2 | 3 => ParsedArgs::Compare {
-                ref_a: rest[0].clone(),
-                ref_b: rest[1].clone(),
-                dir: rest.get(2).cloned(),
+            1 | 2 => ParsedArgs::Compare {
+                refspec: rest[0].clone(),
+                dir: rest.get(1).cloned(),
             },
             _ => ParsedArgs::CompareUsage,
         };
@@ -47,8 +43,8 @@ fn classify_args(args: &[String]) -> ParsedArgs {
 
 /// Resolve a compare launch or exit(2) with a usage error on stderr — argument
 /// errors must never open a window (scriptable contract).
-fn compare_launch(ref_a: String, ref_b: String, dir: Option<String>) -> Launch {
-    let usage = "usage: mcr diff <refA> <refB> [dir]";
+fn compare_launch(refspec: String, dir: Option<String>) -> Launch {
+    let usage = "usage: mcr diff <branch|commit> [dir]";
     let root = match &dir {
         Some(d) => discovery::repo_root(&std::path::Path::new(d).join(".").to_string_lossy()),
         None => discovery::repo_root_cwd(),
@@ -57,13 +53,11 @@ fn compare_launch(ref_a: String, ref_b: String, dir: Option<String>) -> Launch {
         eprintln!("mcr diff: not inside a git repository\n{usage}");
         std::process::exit(2);
     };
-    for r in [&ref_a, &ref_b] {
-        if !discovery::resolves_to_commit(&root, r) {
-            eprintln!("mcr diff: '{r}' does not resolve to a commit (use two refs, not a range)\n{usage}");
-            std::process::exit(2);
-        }
+    if !discovery::resolves_to_commit(&root, &refspec) {
+        eprintln!("mcr diff: '{refspec}' does not resolve to a commit\n{usage}");
+        std::process::exit(2);
     }
-    let files = match discovery::changed_paths(&root, &ref_a, &ref_b) {
+    let files = match discovery::changed_paths(&root, &refspec) {
         Ok(f) => f,
         Err(e) => {
             eprintln!("mcr diff: {e}");
@@ -75,7 +69,7 @@ fn compare_launch(ref_a: String, ref_b: String, dir: Option<String>) -> Launch {
         repo_root: Some(root),
         files: Vec::new(),
         keep_backup: false,
-        compare: Some(CompareSpec { ref_a, ref_b, files }),
+        compare: Some(CompareSpec { refspec, files }),
     }
 }
 
@@ -88,10 +82,10 @@ fn parse_launch() -> Launch {
     let passed = match classify_args(&args) {
         ParsedArgs::Demo => return Launch::default(),
         ParsedArgs::CompareUsage => {
-            eprintln!("usage: mcr diff <refA> <refB> [dir]");
+            eprintln!("usage: mcr diff <branch|commit> [dir]");
             std::process::exit(2);
         }
-        ParsedArgs::Compare { ref_a, ref_b, dir } => return compare_launch(ref_a, ref_b, dir),
+        ParsedArgs::Compare { refspec, dir } => return compare_launch(refspec, dir),
         ParsedArgs::Mergetool(files) => files,
     };
     match discovery::repo_root(&passed.merged) {
@@ -224,11 +218,10 @@ mod tests {
     }
 
     #[test]
-    fn classify_diff_two_refs() {
-        match classify_args(&v(&["diff", "main", "feature"])) {
-            ParsedArgs::Compare { ref_a, ref_b, dir } => {
-                assert_eq!(ref_a, "main");
-                assert_eq!(ref_b, "feature");
+    fn classify_diff_one_ref() {
+        match classify_args(&v(&["diff", "main"])) {
+            ParsedArgs::Compare { refspec, dir } => {
+                assert_eq!(refspec, "main");
                 assert!(dir.is_none());
             }
             _ => panic!("expected Compare"),
@@ -237,20 +230,20 @@ mod tests {
 
     #[test]
     fn classify_diff_with_dir_anchor() {
-        match classify_args(&v(&["diff", "v1.0", "abc123", "/repo"])) {
-            ParsedArgs::Compare { dir, .. } => assert_eq!(dir.as_deref(), Some("/repo")),
+        match classify_args(&v(&["diff", "abc123", "/repo"])) {
+            ParsedArgs::Compare { refspec, dir } => {
+                assert_eq!(refspec, "abc123");
+                assert_eq!(dir.as_deref(), Some("/repo"));
+            }
             _ => panic!("expected Compare"),
         }
     }
 
     #[test]
     fn classify_diff_wrong_arity_is_usage() {
+        assert!(matches!(classify_args(&v(&["diff"])), ParsedArgs::CompareUsage));
         assert!(matches!(
-            classify_args(&v(&["diff", "main"])),
-            ParsedArgs::CompareUsage
-        ));
-        assert!(matches!(
-            classify_args(&v(&["diff", "a", "b", "c", "d"])),
+            classify_args(&v(&["diff", "a", "b", "c"])),
             ParsedArgs::CompareUsage
         ));
     }

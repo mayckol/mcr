@@ -33,10 +33,10 @@ pub struct Launch {
     pub compare: Option<CompareSpec>,
 }
 
-/// A `mcr diff` invocation: the two refs and the files that differ between them.
+/// A `mcr diff <ref>` invocation: the ref being compared against the working
+/// tree, and the files that differ.
 pub struct CompareSpec {
-    pub ref_a: String,
-    pub ref_b: String,
+    pub refspec: String,
     pub files: Vec<discovery::ChangedFile>,
 }
 
@@ -231,44 +231,44 @@ impl SessionManager {
         model
     }
 
-    /// Open one compared file: local = blob at `ref_a`, incoming = blob at `ref_b`,
-    /// base = the current worktree content — so the initial result projection IS
-    /// the worktree file, and hunks show where each ref diverges from it. Binary
-    /// (or non-UTF8) files are listed but get no session. Returns the model for
-    /// text files.
+    /// Open one compared file: local = blob at the ref, base = incoming = the
+    /// current worktree content — so the result projection IS the working file
+    /// and every hunk is a place the ref differs from it (apply pulls the ref's
+    /// version in). Binary (or non-UTF8) files are listed but get no session.
+    /// Returns the model for text files.
     pub fn open_compare_entry(
         &self,
         root: &str,
         file: &discovery::ChangedFile,
-        ref_a: &str,
-        ref_b: &str,
+        refspec: &str,
     ) -> Option<SessionModel> {
-        let path_at_a = file.old_path.as_deref().unwrap_or(&file.path);
-        let local_bytes = discovery::ref_blob(root, ref_a, path_at_a);
-        let incoming_bytes = discovery::ref_blob(root, ref_b, &file.path);
+        let path_at_ref = file.old_path.as_deref().unwrap_or(&file.path);
+        let ref_bytes = discovery::ref_blob(root, refspec, path_at_ref);
         let worktree_path = std::path::Path::new(root)
             .join(&file.path)
             .to_string_lossy()
             .into_owned();
-        let base_bytes = std::fs::read(&worktree_path).unwrap_or_default();
+        let worktree_bytes = std::fs::read(&worktree_path).unwrap_or_default();
 
         let label = match &file.old_path {
             Some(old) => format!("{old} → {}", file.path),
             None => file.path.clone(),
         };
         let id = self.next_id();
-        let binary = discovery::blob_is_binary(&local_bytes)
-            || discovery::blob_is_binary(&incoming_bytes)
-            || discovery::blob_is_binary(&base_bytes);
+        let binary =
+            discovery::blob_is_binary(&ref_bytes) || discovery::blob_is_binary(&worktree_bytes);
 
         let (kind, model) = if binary {
             (ConflictKind::Binary, None)
         } else {
-            let session = MergeSession::open(
+            let current = String::from_utf8_lossy(&worktree_bytes).into_owned();
+            // open_unapplied: the ref's changes start unresolved, so the editable
+            // pane IS the current file until the user pulls a hunk in.
+            let session = MergeSession::open_unapplied(
                 id.clone(),
-                &String::from_utf8_lossy(&local_bytes),
-                &String::from_utf8_lossy(&base_bytes),
-                &String::from_utf8_lossy(&incoming_bytes),
+                &String::from_utf8_lossy(&ref_bytes),
+                &current,
+                &current,
                 WhitespaceMode::None,
             );
             let model = session.to_model();
@@ -935,7 +935,9 @@ mod tests {
         let (main, feature) = setup_compare_repo(&dir);
         let root = dir.to_string_lossy().into_owned();
 
-        let mut files = discovery::changed_paths(&root, &main, &feature).unwrap();
+        // Worktree is the `main` checkout; statuses read ref → worktree:
+        // added.txt exists only at `feature` (D), gone.txt only in the worktree (A).
+        let mut files = discovery::changed_paths(&root, &feature).unwrap();
         files.sort_by(|a, b| a.path.cmp(&b.path));
         let statuses: Vec<(&str, &str)> = files
             .iter()
@@ -943,14 +945,14 @@ mod tests {
             .collect();
         assert_eq!(
             statuses,
-            vec![("added.txt", "A"), ("f.txt", "M"), ("gone.txt", "D")]
+            vec![("added.txt", "D"), ("f.txt", "M"), ("gone.txt", "A")]
         );
 
-        // Rename detection carries the old path.
+        // Rename detection carries the old path (ref side).
         git_ok(&dir, &["checkout", "-q", "-b", "renamer"]);
         git_ok(&dir, &["mv", "f.txt", "renamed.txt"]);
         git_ok(&dir, &["commit", "-q", "-am", "rename"]);
-        let renamed = discovery::changed_paths(&root, &main, "renamer").unwrap();
+        let renamed = discovery::changed_paths(&root, &main).unwrap();
         let r = renamed.iter().find(|f| f.status == "R").expect("R entry");
         assert_eq!(r.old_path.as_deref(), Some("f.txt"));
         assert_eq!(r.path, "renamed.txt");
@@ -965,9 +967,9 @@ mod tests {
         }
         let dir = std::env::temp_dir().join(format!("mcr-cmp-save-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let (main, feature) = setup_compare_repo(&dir);
+        let (_main, feature) = setup_compare_repo(&dir);
         let root = dir.to_string_lossy().into_owned();
-        // Dirty the worktree so it differs from both refs.
+        // Dirty the worktree so it differs from the ref.
         std::fs::write(dir.join("f.txt"), "one\nworktree\nthree\n").unwrap();
 
         let m = SessionManager::new();
@@ -976,19 +978,19 @@ mod tests {
             path: "f.txt".into(),
             old_path: None,
         };
-        let model = m.open_compare_entry(&root, &f, &main, &feature).unwrap();
-        // The result pane starts as the CURRENT worktree content.
+        let model = m.open_compare_entry(&root, &f, &feature).unwrap();
+        // The editable pane starts as the CURRENT worktree content; the left pane
+        // is the ref's version.
         assert_eq!(model.panes.result.join("\n"), "one\nworktree\nthree\n");
-        assert_eq!(model.panes.local.join("\n"), "one\nmain\nthree\n");
-        assert_eq!(model.panes.incoming.join("\n"), "one\nfeature\nthree\n");
+        assert_eq!(model.panes.local.join("\n"), "one\nfeature\nthree\n");
 
-        // Take the feature side for the diverging hunk and save.
+        // Pull the ref's version of the diverging hunk into the current file, save.
         let hunk = model
             .hunks
             .iter()
-            .find(|h| h.category == mcr_core::Category::Conflicting)
-            .expect("both refs differ from worktree");
-        m.apply_change(&model.session_id, hunk.id, "incoming").unwrap();
+            .find(|h| h.origin == mcr_core::Origin::Local)
+            .expect("ref differs from worktree");
+        m.apply_change(&model.session_id, hunk.id, "local").unwrap();
         m.save_merged(&model.session_id).unwrap();
 
         let written = std::fs::read_to_string(dir.join("f.txt")).unwrap();
@@ -1020,25 +1022,26 @@ mod tests {
         let root = dir.to_string_lossy().into_owned();
 
         let m = SessionManager::new();
-        // added.txt exists only at `feature` (and not in the main-checkout worktree).
+        let _ = main;
+        // added.txt exists only at `feature` — not in the main-checkout worktree.
         let added = discovery::ChangedFile {
-            status: "A".into(),
+            status: "D".into(),
             path: "added.txt".into(),
             old_path: None,
         };
-        let model = m.open_compare_entry(&root, &added, &main, &feature).unwrap();
-        assert_eq!(model.panes.local.join("\n"), "");
-        assert_eq!(model.panes.incoming.join("\n"), "new\n");
+        let model = m.open_compare_entry(&root, &added, &feature).unwrap();
+        assert_eq!(model.panes.local.join("\n"), "new\n");
+        assert_eq!(model.panes.result.join("\n"), "");
 
-        // gone.txt exists at `main` but not at `feature`.
+        // gone.txt exists in the worktree but not at `feature`.
         let gone = discovery::ChangedFile {
-            status: "D".into(),
+            status: "A".into(),
             path: "gone.txt".into(),
             old_path: None,
         };
-        let model = m.open_compare_entry(&root, &gone, &main, &feature).unwrap();
-        assert_eq!(model.panes.local.join("\n"), "keep\n");
-        assert_eq!(model.panes.incoming.join("\n"), "");
+        let model = m.open_compare_entry(&root, &gone, &feature).unwrap();
+        assert_eq!(model.panes.local.join("\n"), "");
+        assert_eq!(model.panes.result.join("\n"), "keep\n");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1061,15 +1064,15 @@ mod tests {
 
         let m = SessionManager::new();
         let f = discovery::ChangedFile {
-            status: "A".into(),
+            status: "D".into(),
             path: "blob.bin".into(),
             old_path: None,
         };
-        assert!(m.open_compare_entry(&root, &f, &main, "bin").is_none());
+        assert!(m.open_compare_entry(&root, &f, "bin").is_none());
         let summaries = m.summaries();
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].kind, ConflictKind::Binary);
-        assert_eq!(summaries[0].change_status.as_deref(), Some("A"));
+        assert_eq!(summaries[0].change_status.as_deref(), Some("D"));
         assert!(m.model(&summaries[0].session_id).is_err());
 
         let _ = std::fs::remove_dir_all(&dir);

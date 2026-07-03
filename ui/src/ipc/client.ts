@@ -23,9 +23,8 @@ export interface Bootstrap {
   progress: SessionProgress;
   active: SessionModel | null;
   file_name?: string | null;
-  /** Compare mode only: the two refs being compared. */
-  ref_a?: string | null;
-  ref_b?: string | null;
+  /** Compare mode only: the ref the working tree is compared against. */
+  compare_ref?: string | null;
 }
 
 export const ipc = {

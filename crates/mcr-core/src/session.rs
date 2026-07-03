@@ -43,6 +43,33 @@ impl MergeSession {
         incoming: &str,
         mode: WhitespaceMode,
     ) -> Self {
+        Self::open_with(id, local, ancestor, incoming, mode, true)
+    }
+
+    /// Like [`open`], but leaves every hunk unresolved instead of auto-applying
+    /// one-sided changes — the projection starts as the base text verbatim.
+    /// Compare mode uses this so the editable pane opens as the current file and
+    /// changes from the ref are only pulled in explicitly.
+    ///
+    /// [`open`]: Self::open
+    pub fn open_unapplied(
+        id: impl Into<String>,
+        local: &str,
+        ancestor: &str,
+        incoming: &str,
+        mode: WhitespaceMode,
+    ) -> Self {
+        Self::open_with(id, local, ancestor, incoming, mode, false)
+    }
+
+    fn open_with(
+        id: impl Into<String>,
+        local: &str,
+        ancestor: &str,
+        incoming: &str,
+        mode: WhitespaceMode,
+        auto_apply: bool,
+    ) -> Self {
         let base = split_lines(ancestor);
         let local = split_lines(local);
         let incoming = split_lines(incoming);
@@ -60,7 +87,7 @@ impl MergeSession {
                     origin: *origin,
                     category: *category,
                 });
-                let init = if *category == Category::Conflicting {
+                let init = if *category == Category::Conflicting || !auto_apply {
                     HunkState::Unresolved
                 } else {
                     HunkState::Applied {

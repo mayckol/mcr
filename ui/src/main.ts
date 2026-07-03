@@ -381,21 +381,23 @@ function setMergeToolMode(on: boolean) {
   $("footbar").style.display = on ? "flex" : "none";
 }
 
-function setCompareMode(refA: string, refB: string) {
+// Compare is two panes: the ref on the left, the editable working file on the
+// right. The incoming pane is hidden — it would only duplicate the current file.
+function setCompareMode(ref: string) {
   $("merge-actions").style.display = "none";
   $("footbar").style.display = "flex";
   $("foot-accept-left").style.display = "none";
   $("foot-accept-right").style.display = "none";
   const save = $("foot-apply");
   save.textContent = "Save";
-  save.title = "Write the result to the working tree";
+  save.title = "Write the current version to the working tree";
   const close = $("foot-cancel");
   close.textContent = "Close";
   close.title = "Close the compare window";
-  $("title-local").textContent = refA;
-  $("title-result").textContent = "Working tree";
-  $("title-incoming").textContent = refB;
-  document.title = `MCR — ${refA} ↔ ${refB}`;
+  $("title-local").textContent = ref;
+  $("title-result").textContent = "Current version";
+  container.classList.add("two-pane");
+  document.title = `MCR — ${ref} ↔ working tree`;
 }
 
 async function boot() {
@@ -404,7 +406,7 @@ async function boot() {
     if (b.mode === "merge" || b.mode === "compare") {
       appMode = b.mode;
       if (b.mode === "compare") {
-        setCompareMode(b.ref_a ?? "A", b.ref_b ?? "B");
+        setCompareMode(b.compare_ref ?? "ref");
       } else {
         setMergeToolMode(true);
       }
@@ -422,7 +424,7 @@ async function boot() {
         apply(b.active);
         focusFirstChange();
       } else if (b.mode === "compare" && files.length === 0) {
-        $("status").textContent = `No differences between ${b.ref_a} and ${b.ref_b}`;
+        $("status").textContent = `No differences between ${b.compare_ref} and the working tree`;
       } else {
         // More than one file: show the list first, no editor yet (FR-001).
         renderStatus();

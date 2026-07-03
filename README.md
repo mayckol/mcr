@@ -14,8 +14,8 @@ ribbons, and apply or revert each change individually. Built with a Rust core
   that bind each side change to its result region and follow the lines as you scroll.
 - **Apply / revert**: per-change gizmos, bulk "apply all non-conflicting", and
   fully reversible undo/redo.
-- **Compare branches & commits**: `mcr diff main feature` opens any two refs
-  against your working tree — cherry-pick hunks from either side.
+- **Compare with a branch or commit**: `mcr diff main` opens any ref against
+  your working tree — pull the hunks you want into your code.
 - **Configurable keyboard shortcuts** (Cmd+Z / Cmd+Shift+Z by default).
 - **Themes**: Tokyo Night (default), Tokyo Storm, Daylight, and Ember — switch
   in Settings, applies live.
@@ -156,31 +156,30 @@ Night** (default), **Tokyo Storm**, **Daylight** (light), and **Ember**. The
 choice applies immediately — editor, syntax colors, diff bands, everything — and
 is remembered across launches.
 
-### Compare branches & commits
+### Compare a branch or commit with your code
 
-`mcr diff` opens a three-pane comparison of any two refs — branches, tags, or
-commit SHAs — with your **working tree in the middle**:
+`mcr diff <ref>` compares any branch, tag, or commit against your **current
+working tree**, side by side:
 
 ```bash
 cd your-repo
-mcr diff main feature          # two branches
-mcr diff v1.2.0 v1.3.0         # two tags
-mcr diff HEAD~3 HEAD           # two commits
-mcr diff abc1234 my-branch     # mix freely
+mcr diff main            # a branch
+mcr diff v1.2.0          # a tag
+mcr diff HEAD~3          # a commit
+mcr diff abc1234         # a SHA
 ```
 
 | Pane | Meaning |
 |------|---------|
-| **Left** | The file at the first ref — read-only |
-| **Center** | Your current working-tree file — editable |
-| **Right** | The file at the second ref — read-only |
+| **Left** | The file at the ref — read-only |
+| **Right** (*Current version*) | Your working-tree file — editable |
 
-The sidebar lists every file that differs between the two refs with its git
-status (**A**dded / **M**odified / **D**eleted / **R**enamed). Diff bands show
-where each ref diverges from your current file; the `»` / `«` gizmos pull a hunk
-from either ref into the center, and you can type freely.
+The sidebar lists every file that differs, with its git status (**A**dded /
+**M**odified / **D**eleted / **R**enamed). Diff bands show where the ref
+diverges from your code; click the `»` gizmo to pull that hunk into your file,
+or just type in the right pane.
 
-- **Save** writes the center pane to the working-tree file. Nothing is ever
+- **Save** writes the current version to the working-tree file. Nothing is ever
   staged — review with `git diff` afterwards.
 - **Close** exits without touching anything (it confirms first if you have
   unsaved edits).
@@ -188,7 +187,7 @@ from either ref into the center, and you can type freely.
 
 The command is script-friendly for editor/IDE integration: it blocks until the
 window closes, exits `0` on a normal close, and exits `2` with a usage message
-on bad arguments (`mcr diff <refA> <refB> [dir]` — the optional `dir` anchors
+on bad arguments (`mcr diff <branch|commit> [dir]` — the optional `dir` anchors
 the repository when the caller's working directory isn't inside it).
 
 ### Use as a `git mergetool`

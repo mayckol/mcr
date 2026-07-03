@@ -191,10 +191,12 @@ pub fn resolves_to_commit(root: &str, refspec: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Files changed between two refs (`git diff --name-status -z A B`). Rename/copy
-/// records carry two paths (old, new); everything else carries one.
-pub fn changed_paths(root: &str, ref_a: &str, ref_b: &str) -> Result<Vec<ChangedFile>, String> {
-    let out = git(root, &["diff", "--name-status", "-z", ref_a, ref_b])?;
+/// Files that differ between a ref and the working tree (`git diff --name-status
+/// -z <ref>`). Rename/copy records carry two paths (old, new); everything else
+/// carries one. Status letters read ref → worktree: A = only in the worktree,
+/// D = only at the ref.
+pub fn changed_paths(root: &str, refspec: &str) -> Result<Vec<ChangedFile>, String> {
+    let out = git(root, &["diff", "--name-status", "-z", refspec])?;
     let mut tokens = out
         .split(|&b| b == 0)
         .filter(|s| !s.is_empty())

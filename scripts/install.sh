@@ -190,7 +190,7 @@ MCRCLI
 app="$APP"
 if [ "\${1:-}" = "diff" ]; then
   # Append the cwd anchor only when the caller didn't pass a dir themselves.
-  if [ "\$#" -eq 3 ]; then exec "\$app" "\$@" "\$(pwd)"; fi
+  if [ "\$#" -eq 2 ]; then exec "\$app" "\$@" "\$(pwd)"; fi
   exec "\$app" "\$@"
 fi
 if [ "\$#" -eq 0 ]; then
