@@ -14,8 +14,11 @@ ribbons, and apply or revert each change individually. Built with a Rust core
   that bind each side change to its result region and follow the lines as you scroll.
 - **Apply / revert**: per-change gizmos, bulk "apply all non-conflicting", and
   fully reversible undo/redo.
+- **Compare branches & commits**: `mcr diff main feature` opens any two refs
+  against your working tree — cherry-pick hunks from either side.
 - **Configurable keyboard shortcuts** (Cmd+Z / Cmd+Shift+Z by default).
-- **Tokyo Night** theme.
+- **Themes**: Tokyo Night (default), Tokyo Storm, Daylight, and Ember — switch
+  in Settings, applies live.
 
 ---
 
@@ -92,8 +95,8 @@ brew uninstall --cask mcr
 Launch **MCR** from the Applications menu / Launchpad, or from a terminal:
 
 ```bash
-mcr              # Linux launcher
-open -a MCR      # macOS
+mcr              # macOS and Linux (installed by the installer)
+open -a MCR      # macOS alternative
 ```
 
 ### The window
@@ -145,6 +148,49 @@ Click the **⌨** toolbar button to open the shortcuts panel: click any shortcut
 press the new keys to rebind it, `Esc` cancels, **Reset to defaults** restores
 them. Bindings are saved and persist across restarts.
 
+### Themes
+
+Open **Settings** (the ⚙ toolbar button, `⌘,` / `Ctrl+,`, or **mcr-app →
+Settings…** in the macOS menu bar) → **Appearance**. Four themes ship: **Tokyo
+Night** (default), **Tokyo Storm**, **Daylight** (light), and **Ember**. The
+choice applies immediately — editor, syntax colors, diff bands, everything — and
+is remembered across launches.
+
+### Compare branches & commits
+
+`mcr diff` opens a three-pane comparison of any two refs — branches, tags, or
+commit SHAs — with your **working tree in the middle**:
+
+```bash
+cd your-repo
+mcr diff main feature          # two branches
+mcr diff v1.2.0 v1.3.0         # two tags
+mcr diff HEAD~3 HEAD           # two commits
+mcr diff abc1234 my-branch     # mix freely
+```
+
+| Pane | Meaning |
+|------|---------|
+| **Left** | The file at the first ref — read-only |
+| **Center** | Your current working-tree file — editable |
+| **Right** | The file at the second ref — read-only |
+
+The sidebar lists every file that differs between the two refs with its git
+status (**A**dded / **M**odified / **D**eleted / **R**enamed). Diff bands show
+where each ref diverges from your current file; the `»` / `«` gizmos pull a hunk
+from either ref into the center, and you can type freely.
+
+- **Save** writes the center pane to the working-tree file. Nothing is ever
+  staged — review with `git diff` afterwards.
+- **Close** exits without touching anything (it confirms first if you have
+  unsaved edits).
+- Binary files are listed but not openable as text.
+
+The command is script-friendly for editor/IDE integration: it blocks until the
+window closes, exits `0` on a normal close, and exits `2` with a usage message
+on bad arguments (`mcr diff <refA> <refB> [dir]` — the optional `dir` anchors
+the repository when the caller's working directory isn't inside it).
+
 ### Use as a `git mergetool`
 
 MCR honors Git's mergetool contract: it reads `LOCAL` / `BASE` / `REMOTE`,
@@ -152,37 +198,24 @@ resolves into `MERGED`, and exits `0` on **Save & Exit** or non-zero on
 **Abort**. When invoked with four file paths it opens those files instead of the
 demo; otherwise it runs standalone.
 
-Configure it once (the `.cmd` must point at the **blocking** binary — not the
-detaching launcher — so Git waits for the result):
+**The installer registers everything for you** — it writes a foreground
+`mcr-mergetool` shim to `~/.local/bin` and configures `mergetool.mcr.*`
+globally (it only sets `merge.tool mcr` if you had no merge tool yet).
 
-**macOS:**
-
-```bash
-git config --global merge.tool mcr
-git config --global mergetool.mcr.cmd \
-  '/Applications/MCR.app/Contents/MacOS/mcr-app "$LOCAL" "$BASE" "$REMOTE" "$MERGED"'
-git config --global mergetool.mcr.trustExitCode true
-```
-
-**Linux:**
+To configure manually, point the `.cmd` at the **shim** — it blocks until the
+window closes and resolves Git's relative paths to absolute (required on Linux,
+where the AppImage changes directory at startup):
 
 ```bash
 git config --global merge.tool mcr
 git config --global mergetool.mcr.cmd \
-  '"$HOME/.local/bin/mcr.AppImage" "$LOCAL" "$BASE" "$REMOTE" "$MERGED"'
+  '"$HOME/.local/bin/mcr-mergetool" "$LOCAL" "$BASE" "$REMOTE" "$MERGED"'
 git config --global mergetool.mcr.trustExitCode true
 ```
 
 **Per-project instead of global:** run the same commands with `--local` (the
 default scope inside a repo) so only that project uses MCR — it writes to
-`.git/config`:
-
-```bash
-# from inside the repo
-git config --local merge.tool mcr
-git config --local mergetool.mcr.cmd '<same cmd as above for your OS>'
-git config --local mergetool.mcr.trustExitCode true
-```
+`.git/config`.
 
 Then, on a conflicted repo:
 
