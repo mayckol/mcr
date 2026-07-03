@@ -21,6 +21,17 @@ function isResolved(h: ChangeRegion): boolean {
   return h.state.kind !== "unresolved";
 }
 
+// Whether a side pane took part in the change. The backend anchors every hunk in
+// all three panes (an incoming-only edit still carries the matching, unchanged
+// local lines), but banding the side that did NOT change leaves a highlight with
+// no connector ribbon — it reads as broken. Band a side only when it participated,
+// matching the connector/control gating; the result pane always shows the change.
+function participates(h: ChangeRegion, pane: PaneName): boolean {
+  if (pane === "result" || h.category === "conflicting") return true;
+  if (pane === "local") return h.origin === "local" || h.origin === "both";
+  return h.origin === "incoming" || h.origin === "both";
+}
+
 // Build line-band + word-span decorations for one pane from the hunk list.
 // Decorations are collected then sorted by Decoration.set: line-bands (at a line's
 // start) and word-marks (mid-line) interleave across positions, so a pre-sorted
@@ -30,6 +41,7 @@ function build(view: EditorView, pane: PaneName, hunks: ChangeRegion[]): Decorat
   const decos: Range<Decoration>[] = [];
 
   for (const h of hunks) {
+    if (!participates(h, pane)) continue;
     const { start, end } = rangeFor(h, pane);
     const colors = CATEGORY_COLORS[h.category];
     const dim = isResolved(h) ? " mcr-resolved" : "";
@@ -81,6 +93,7 @@ function buildGutter(view: EditorView, pane: PaneName, hunks: ChangeRegion[]): R
   const docLines = view.state.doc.lines;
   const ordered = [...hunks].sort((a, b) => rangeFor(a, pane).start - rangeFor(b, pane).start);
   for (const h of ordered) {
+    if (!participates(h, pane)) continue;
     const { start, end } = rangeFor(h, pane);
     const dim = isResolved(h) ? " mcr-g-resolved" : "";
     for (let ln = start; ln < end && ln < docLines; ln++) {

@@ -60,17 +60,52 @@ export class ConnectorOverlay {
     const rr = this.result.scrollDOM.getBoundingClientRect();
     const ir = this.right.scrollDOM.getBoundingClientRect();
 
+    // Each pane reserves a scrollbar rail its line backgrounds can't paint into,
+    // so a band stops a bar-width short of the pane edge. The bar sits on the
+    // OUTER edge of every pane (local's on the left via the rtl scroller, result's
+    // and incoming's on the right). We anchor the ribbons at the pane's inner
+    // CONTENT edge and separately cap the outer rail with the band tint, so the
+    // highlight reaches the pane edge with the scrollbar sitting within it.
+    const bar = (v: EditorView) => v.scrollDOM.offsetWidth - v.scrollDOM.clientWidth;
+    const barLeft = bar(this.left);
+    const barResult = bar(this.result);
+    const barRight = bar(this.right);
     const xLeftGutter = lr.right - cr.left;
     const xResultLeft = rr.left - cr.left;
-    const xResultRight = rr.right - cr.left;
+    const xResultRight = rr.right - cr.left - barResult;
     const xRightGutter = ir.left - cr.left;
+
+    // Cap only a pane's OUTER edge — the side with no connectors. Local's bar is
+    // always outer-left; incoming's is outer-right. The result pane's bar is on its
+    // right, which is an INNER (connector) edge in the 3-pane merge — there the
+    // ribbons already bridge the band to incoming, so a cap would only stack over
+    // them and muddy the tint. In 2-pane compare the result IS the rightmost pane,
+    // so its right edge is outer and does need the cap.
+    const compare = this.container.classList.contains("two-pane");
 
     while (this.svg.firstChild) this.svg.removeChild(this.svg.firstChild);
 
     for (const h of hunks) {
+      const strong = h.state.kind === "unresolved";
+      const conflict = h.category === "conflicting";
+      const hasLocal = conflict || h.origin === "local" || h.origin === "both";
+      const hasIncoming = conflict || h.origin === "incoming" || h.origin === "both";
+
+      // Outer-rail caps first, so the connector ribbons paint over them. Cap a side
+      // only when it is banded (it participated in the change) — an unbanded side
+      // would otherwise get a stray tint in its scrollbar rail.
+      if (hasLocal) {
+        this.cap(this.left, h.local_range, lr.left - cr.left, barLeft, h.category, cr.top, strong);
+      }
+      if (compare) {
+        this.cap(this.result, h.result_range, rr.right - cr.left - barResult, barResult, h.category, cr.top, strong);
+      }
+      if (hasIncoming) {
+        this.cap(this.right, h.incoming_range, ir.right - cr.left - barRight, barRight, h.category, cr.top, strong);
+      }
+
       const res = edge(this.result, h.result_range);
       if (!res) continue;
-      const strong = h.state.kind === "unresolved";
 
       if (h.origin === "local" || h.origin === "both" || h.category === "conflicting") {
         const le = edge(this.left, h.local_range);
@@ -85,6 +120,31 @@ export class ConnectorOverlay {
         }
       }
     }
+  }
+
+  // Fill a pane's reserved scrollbar rail with the band tint across a hunk's line
+  // range, so the change highlight reaches the pane edge instead of stopping at the
+  // content edge. No-op when the rail is zero-width (no scrollbar) or off-screen.
+  private cap(
+    view: EditorView,
+    range: LineRange,
+    x: number,
+    width: number,
+    cat: ChangeRegion["category"],
+    offY: number,
+    strong: boolean
+  ) {
+    if (width <= 0 || range.end <= range.start) return;
+    const e = edge(view, range);
+    if (!e) return;
+    const rect = document.createElementNS(SVG_NS, "rect");
+    rect.setAttribute("x", String(x));
+    rect.setAttribute("y", String(e.top - offY));
+    rect.setAttribute("width", String(width));
+    rect.setAttribute("height", String(e.bottom - e.top));
+    rect.style.fill = CATEGORY_COLORS[cat].band;
+    if (!strong) rect.style.opacity = "0.7";
+    this.svg.appendChild(rect);
   }
 
   private band(

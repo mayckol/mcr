@@ -64,12 +64,6 @@
 ::-webkit-scrollbar { width: var(--scroll-size); height: var(--scroll-size); }
 ::-webkit-scrollbar-track { background: var(--scroll-track); }
 ::-webkit-scrollbar-corner { background: var(--scroll-track); }
-/* Editor panes keep a transparent track so a changed line's band (painted across
-   the reserved scrollbar-gutter rail by the .mcr-band box-shadow) reaches the pane
-   edge instead of being cut short by the opaque track. */
-.cm-scroller { scrollbar-color: var(--scroll-thumb) transparent; }
-.cm-scroller::-webkit-scrollbar-track,
-.cm-scroller::-webkit-scrollbar-corner { background: transparent; }
 ::-webkit-scrollbar-thumb {
   background: var(--scroll-thumb);
   border: 3px solid transparent;
@@ -246,16 +240,16 @@ button { font: inherit; }
 .cm-editor { height: 100%; }
 .cm-gutters { background: transparent; border: none; }
 
+/* Scrollbar side. A pane's vertical bar sits on its OUTER edge so the inner edge —
+   where change bands meet the connector ribbons — is never cropped by the bar.
+   `direction: rtl` on the scroller moves the native vertical bar to the left; the
+   content and gutter are set back to ltr so code and line numbers read normally,
+   which also places the line-number gutter on the inner (center-facing) side. */
+.pane.sb-left .cm-scroller { direction: rtl; }
+.pane.sb-left .cm-scroller > * { direction: ltr; }
+
 .mcr-filler { background: repeating-linear-gradient(45deg, transparent, transparent 6px, color-mix(in srgb, var(--fg) 3%, transparent) 6px, color-mix(in srgb, var(--fg) 3%, transparent) 12px); }
 .mcr-band { border-radius: 0; }
-/* The scroller reserves a scrollbar rail (scrollbar-gutter: stable), which line
-   backgrounds can't reach — the band looked chopped short of the pane edge. An
-   offset solid shadow paints the same tint across the rail without touching
-   layout or CodeMirror's width measuring. */
-.mcr-band.mcr-added { box-shadow: var(--scroll-size) 0 0 var(--band-added); }
-.mcr-band.mcr-removed { box-shadow: var(--scroll-size) 0 0 var(--band-removed); }
-.mcr-band.mcr-modified { box-shadow: var(--scroll-size) 0 0 var(--band-modified); }
-.mcr-band.mcr-conflicting { box-shadow: var(--scroll-size) 0 0 var(--band-conflicting); }
 .mcr-resolved { opacity: 0.7; }
 .mcr-word { border-radius: 2px; }
 
