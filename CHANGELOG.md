@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.3.4
+
+- **Change bands reach the pane edge.** Each pane's vertical scrollbar now sits on
+  its outer edge, so a change highlight is never cropped by the bar and the
+  scrollbar sits within the highlight. Connector ribbons anchor to the band edge.
+- **Only the changed side is highlighted.** An edit made on one side no longer
+  paints a connector-less band on the unchanged opposite side.
+- **Accepted changes read as a ghost.** A resolved change drops its fill and shows
+  a full-width dotted outline where it was, with the apply arrow removed.
+- **Configurable editor font.** Settings → Editor picks the code font family,
+  weight, and size; it applies live to all three panes and is remembered.
+
 ## v0.3.3
 
 - **New logo.** Refreshed the app brand image.
