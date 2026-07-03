@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.3
+
+- **New logo.** Refreshed the app brand image.
+
 ## v0.3.2
 
 - **Compare opens instantly on big diffs.** File sessions now build lazily on
