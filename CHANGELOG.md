@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.3.0
+
+- **Compare mode**: `mcr diff <refA> <refB>` opens a three-pane view — refA |
+  working tree | refB. Cherry-pick hunks from either ref or edit freely; **Save**
+  writes the working-tree file (never stages), **Close** exits cleanly. Bad
+  arguments or refs exit 2 with usage on stderr, so editors/IDEs can script it.
+  The sidebar lists changed files with A/M/D/R badges; the Linux launcher and a
+  new macOS `mcr` shim wire the command up at install time.
+- **Themes**: Tokyo Night (default), Tokyo Storm, Daylight, and Ember. One palette
+  drives the whole app — chrome, editor, syntax highlighting, change bands,
+  connectors. Pick in Settings (toolbar gear, Cmd/Ctrl+comma, or the macOS
+  app-menu **Settings…**); the choice applies live and is remembered.
+- Visual refresh: segmented toolbar groups, softer borders, tighter pane gap,
+  change bands run flush to the pane edge, calmer focus highlight.
+- **Merge safety fixes**:
+  - Cancel in a multi-file merge staged resolved files and exited 0 — the exact
+    opposite of aborting. It now confirms and exits non-zero without saving.
+  - Finishing a merge rewrote binary conflicts with lossy text and resurrected
+    files whose deletion was accepted.
+  - macOS Cmd+Q exited 0 with unresolved conflicts, letting Git stage them.
+  - Non-UTF8 (Latin-1 etc.) files were silently corrupted; they now resolve via
+    raw-blob accept like binaries.
+  - Saving flipped CRLF working-tree files to LF; line endings are preserved.
+- macOS installer actually works now (`hdiutil` mount parse; correct bundle
+  executable path in the mergetool shim).
+- Windows: git calls no longer flash console windows; CI runs the app backend
+  test suite on all three OSes.
+
 ## v0.2.1
 
 - Bottom action bar: **Accept Left** / **Accept Right** apply all non-conflicting
