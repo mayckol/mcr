@@ -83,7 +83,8 @@ never rely on CI sync alone, or `main` drifts from its tags.
    ```sh
    gh run watch --repo mayckol/mcr $(gh run list --repo mayckol/mcr --workflow release.yml -L1 --json databaseId --jq '.[0].databaseId') --exit-status
    ```
-   If the build fails, report the failing job/log; do not proceed to verify.
+   All jobs (builds + `cask`) should be green. If the build fails, report the
+   failing job/log and do not proceed to verify. If only `cask` fails, see step 7.
 
 6. **Verify assets match the tag.** The whole point — catch drift before users do:
    ```sh
@@ -93,15 +94,47 @@ never rely on CI sync alone, or `main` drifts from its tags.
    - `MCR_X.Y.Z_aarch64.dmg`
    - `MCR_X.Y.Z_amd64.AppImage`
    - `MCR_X.Y.Z_amd64.deb`
+   - `MCR-X.Y.Z-1.x86_64.rpm`
    If any name shows a different version than `X.Y.Z`, the sync step failed —
    stop and fix before announcing.
 
-7. **Verify the Homebrew cask updated** (only if the tap token is configured):
+7. **Verify the Homebrew cask updated.** As of v0.3.3 the `cask` CI job pushes the
+   tap automatically (the `HOMEBREW_TAP_GITHUB_TOKEN` secret was fixed — see Notes).
+   Just confirm the tap reflects the new version:
    ```sh
    gh api repos/mayckol/homebrew-tap/contents/Casks/mcr.rb --jq '.content' | base64 -d | grep -E 'version|sha256'
    ```
-   The `version` must equal `X.Y.Z`. If `mcr.rb` is missing, the cask job skipped
-   (no `HOMEBREW_TAP_GITHUB_TOKEN`) — set the secret and re-run the `cask` job.
+   The `version` must equal `X.Y.Z`.
+
+   **If the cask job fails again** (403 / bad or wrong-scoped token), push manually
+   with your own gh auth (you own the tap):
+
+   ```sh
+   # a. download the release dmg and sha256 it
+   gh release download vX.Y.Z --repo mayckol/mcr --pattern "MCR_X.Y.Z_aarch64.dmg" --clobber
+   shasum -a 256 MCR_X.Y.Z_aarch64.dmg
+
+   # b. render Casks/mcr.rb (use python/heredoc, NOT sed into a placeholder —
+   #    a sed slip once published sha256 "PLACEHOLDER"). Template mirrors the
+   #    cask step in release.yml: version, sha256, url with MCR_<ver>_aarch64.dmg.
+
+   # c. PUT it, passing the current file's blob sha so the update is accepted
+   SHA=$(gh api repos/mayckol/homebrew-tap/contents/Casks/mcr.rb --jq .sha)
+   gh api --method PUT repos/mayckol/homebrew-tap/contents/Casks/mcr.rb \
+     -f message="chore: update mcr cask to vX.Y.Z" \
+     -f content="$(base64 -i mcr.rb)" \
+     -f sha="$SHA"
+   ```
+   Re-verify with the step-7 grep; `sha256` must match step a's digest.
+
+   Prefer fixing the token over doing this by hand: a fine-grained PAT needs
+   **Contents: Read-write** AND its **Repository access must include
+   `mayckol/homebrew-tap`** (the v0.3.3 outage was a token scoped to `mayckol/mcr`
+   only — writes to the tap 403'd while reads passed). Do NOT trust
+   `gh api repos/mayckol/homebrew-tap --jq .permissions` to validate it — that
+   field reports your user role (`push:true`) regardless of the token's repo
+   scope. The only real check is a write: rerun the cask job (`gh run rerun <id>
+   --failed` — GitHub re-runs FAILED jobs only, never successful ones).
 
 8. **Smoke-test the installer (optional, recommended):**
    ```sh
@@ -110,10 +143,12 @@ never rely on CI sync alone, or `main` drifts from its tags.
 
 ## Notes
 
-- The `cask` CI job needs a `HOMEBREW_TAP_GITHUB_TOKEN` secret (a PAT with push
-  access to `mayckol/homebrew-tap`); it self-skips if unset. Until it runs once,
-  `brew install --cask mayckol/tap/mcr` fails with "Cask 'mcr' is unavailable"
-  because `Casks/mcr.rb` does not exist yet.
+- The `cask` CI job needs a `HOMEBREW_TAP_GITHUB_TOKEN` secret — a fine-grained
+  PAT with **Contents: Read-write** whose **Repository access includes
+  `mayckol/homebrew-tap`**. Fixed 2026-07-03 (v0.3.3): the prior token had
+  Contents:write but was scoped to `mayckol/mcr` only, so tap writes 403'd. The
+  job now pushes the cask automatically. If it regresses, see step 7 for the
+  token fix and the manual-push fallback.
 - macOS builds are Apple Silicon only; Linux builds are x86_64 only.
 - There is no `mcr` CLI binary yet, so the release ships GUI bundles + a macOS
   cask only. A cross-platform `brew install mayckol/tap/mcr` formula can be added
