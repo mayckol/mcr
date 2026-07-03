@@ -29,8 +29,23 @@ pub struct Sides {
     pub incoming: String,
 }
 
+/// A `git` Command that never flashes a console window: MCR is a GUI-subsystem
+/// binary on Windows, where a plain child process allocates a visible console —
+/// one flash per git call, several calls per file.
+fn git_cmd() -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new("git");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 fn git(root: &str, args: &[&str]) -> Result<Vec<u8>, String> {
-    let out = Command::new("git")
+    let out = git_cmd()
         .arg("-C")
         .arg(root)
         .args(args)
@@ -50,7 +65,7 @@ fn git(root: &str, args: &[&str]) -> Result<Vec<u8>, String> {
 /// Returns `None` when not inside a Git worktree (standalone fallback, R5).
 pub fn repo_root(from: &str) -> Option<String> {
     let dir = Path::new(from).parent().unwrap_or_else(|| Path::new("."));
-    let out = Command::new("git")
+    let out = git_cmd()
         .arg("-C")
         .arg(dir)
         .args(["rev-parse", "--show-toplevel"])
@@ -100,8 +115,11 @@ fn stage_blob(root: &str, stage: u8, path: &str) -> Vec<u8> {
     git(root, &["show", &format!(":{stage}:{path}")]).unwrap_or_default()
 }
 
+// Non-UTF8 counts as binary: the text session is UTF-8 only, so a Latin-1/CP-1252
+// file routed as text would be lossy-converted (every non-ASCII byte → U+FFFD) and
+// the corruption written back on save. Binary kind resolves from raw blobs instead.
 fn is_binary(bytes: &[u8]) -> bool {
-    bytes.contains(&0)
+    bytes.contains(&0) || std::str::from_utf8(bytes).is_err()
 }
 
 /// Classify the conflict at `path` so the UI can route text vs. accept-only files.
@@ -114,11 +132,11 @@ pub fn conflict_kind(root: &str, path: &str) -> ConflictKind {
     if !has_local || !has_incoming {
         return ConflictKind::DeleteModify;
     }
-    if !has_base {
-        return ConflictKind::BothAdded;
-    }
     if is_binary(&stage_blob(root, STAGE_LOCAL, path)) || is_binary(&stage_blob(root, STAGE_INCOMING, path)) {
         return ConflictKind::Binary;
+    }
+    if !has_base {
+        return ConflictKind::BothAdded;
     }
     ConflictKind::Text
 }
@@ -132,6 +150,88 @@ pub fn reconstruct_sides(root: &str, path: &str) -> Sides {
         local: read(STAGE_LOCAL),
         incoming: read(STAGE_INCOMING),
     }
+}
+
+/// One path changed between two refs (`git diff --name-status`).
+#[derive(Clone, Debug)]
+pub struct ChangedFile {
+    /// First letter of the status: A, M, D, R, C, T.
+    pub status: String,
+    /// Path at the second ref (post-rename).
+    pub path: String,
+    /// Path at the first ref for renames/copies.
+    pub old_path: Option<String>,
+}
+
+/// Repository root for the process working directory (compare-mode launch anchor).
+pub fn repo_root_cwd() -> Option<String> {
+    let out = git_cmd()
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let root = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if root.is_empty() {
+        None
+    } else {
+        Some(root)
+    }
+}
+
+/// Whether `refspec` names a commit (branch, tag, or SHA) in the repository.
+pub fn resolves_to_commit(root: &str, refspec: &str) -> bool {
+    git_cmd()
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--verify", "--quiet", &format!("{refspec}^{{commit}}")])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Files changed between two refs (`git diff --name-status -z A B`). Rename/copy
+/// records carry two paths (old, new); everything else carries one.
+pub fn changed_paths(root: &str, ref_a: &str, ref_b: &str) -> Result<Vec<ChangedFile>, String> {
+    let out = git(root, &["diff", "--name-status", "-z", ref_a, ref_b])?;
+    let mut tokens = out
+        .split(|&b| b == 0)
+        .filter(|s| !s.is_empty())
+        .map(|s| String::from_utf8_lossy(s).into_owned());
+    let mut files = Vec::new();
+    while let Some(status) = tokens.next() {
+        let letter = status.chars().next().unwrap_or('M');
+        let takes_two = matches!(letter, 'R' | 'C');
+        let first = match tokens.next() {
+            Some(p) => p,
+            None => break,
+        };
+        let (old_path, path) = if takes_two {
+            match tokens.next() {
+                Some(new) => (Some(first), new),
+                None => (None, first),
+            }
+        } else {
+            (None, first)
+        };
+        files.push(ChangedFile {
+            status: letter.to_string(),
+            path,
+            old_path,
+        });
+    }
+    Ok(files)
+}
+
+/// Raw bytes of a path's blob at an arbitrary ref; empty when absent at that ref.
+pub fn ref_blob(root: &str, refspec: &str, path: &str) -> Vec<u8> {
+    git(root, &["show", &format!("{refspec}:{path}")]).unwrap_or_default()
+}
+
+/// Whether blob content is untextable (NUL bytes or invalid UTF-8).
+pub fn blob_is_binary(bytes: &[u8]) -> bool {
+    is_binary(bytes)
 }
 
 /// Raw bytes of one side's blob — for accepting a whole binary/special file.
@@ -154,7 +254,7 @@ pub fn side_exists(root: &str, side: &str, path: &str) -> bool {
 
 /// `mergetool.keepBackup` (default true) — whether to write `<path>.orig` backups.
 pub fn keep_backup(root: &str) -> bool {
-    Command::new("git")
+    git_cmd()
         .arg("-C")
         .arg(root)
         .args(["config", "--get", "mergetool.keepBackup"])

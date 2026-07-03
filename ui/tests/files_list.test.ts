@@ -75,3 +75,29 @@ describe("FileList (US1)", () => {
     expect(root.querySelector('.file-row[data-id="session-2"] .file-accept')).toBeNull();
   });
 });
+
+describe("FileList (compare mode)", () => {
+  const compareFiles: SessionSummary[] = [
+    { session_id: "session-1", path_label: "new.ts", kind: "text", resolved: false, remaining_conflicts: 0, change_status: "A" },
+    { session_id: "session-2", path_label: "mod.ts", kind: "text", resolved: false, remaining_conflicts: 1, change_status: "M" },
+    { session_id: "session-3", path_label: "old.ts", kind: "text", resolved: false, remaining_conflicts: 0, change_status: "D" },
+  ];
+
+  it("renders name-status badges and no accept buttons", () => {
+    const { root, list } = mount();
+    list.render(compareFiles, "session-2", progress);
+    const badges = [...root.querySelectorAll(".file-change")].map((b) => b.textContent);
+    expect(badges).toEqual(["A", "M", "D"]);
+    expect(root.querySelector(".file-change-A")).not.toBeNull();
+    expect(root.querySelector(".file-accept")).toBeNull();
+    expect(root.querySelector(".file-status")).toBeNull();
+    expect(root.querySelector(".file-list-head")!.textContent).toContain("3 file(s) changed");
+  });
+
+  it("row click selects the compared file", () => {
+    const { root, list, onSelect } = mount();
+    list.render(compareFiles, null, progress);
+    (root.querySelector('.file-row[data-id="session-3"]') as HTMLElement).click();
+    expect(onSelect).toHaveBeenCalledWith("session-3");
+  });
+});

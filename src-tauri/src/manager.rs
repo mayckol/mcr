@@ -29,6 +29,15 @@ pub struct Launch {
     pub repo_root: Option<String>,
     pub files: Vec<DiscoveredFile>,
     pub keep_backup: bool,
+    /// Set when launched as `mcr diff <refA> <refB>` — compare mode.
+    pub compare: Option<CompareSpec>,
+}
+
+/// A `mcr diff` invocation: the two refs and the files that differ between them.
+pub struct CompareSpec {
+    pub ref_a: String,
+    pub ref_b: String,
+    pub files: Vec<discovery::ChangedFile>,
 }
 
 /// Per-file metadata the multi-file session tracks alongside the live MergeSession.
@@ -38,6 +47,11 @@ pub struct MergeFileEntry {
     pub worktree_path: String,
     pub kind: ConflictKind,
     pub resolved: bool,
+    /// Resolved by `accept_special` writing raw blob bytes (or deleting the file).
+    /// While set, the text session must never be written over that resolution.
+    pub accepted_raw: bool,
+    /// Compare mode only: git name-status letter (A/M/D/R/…) between the two refs.
+    pub change_status: Option<String>,
 }
 
 /// One row of the file list handed to the UI (lazy — no full model).
@@ -48,6 +62,8 @@ pub struct SessionSummary {
     pub kind: ConflictKind,
     pub resolved: bool,
     pub remaining_conflicts: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change_status: Option<String>,
 }
 
 /// Derived progress over the whole conflicted set (FR-006).
@@ -158,6 +174,19 @@ impl SessionManager {
             .get(session_id)
             .cloned()
             .ok_or_else(|| format!("no MERGED path for session: {session_id}"))?;
+        // Multi-file sides come from index blobs, which are repo-normalized (LF)
+        // under core.autocrlf — but the checkout on disk may be CRLF. Match the
+        // existing worktree file's endings so resolving never flips a file's EOLs.
+        // Skip when the result already carries CRLF (single-file path uses Git's
+        // smudged temp files, whose \r survives split/join).
+        let text = match std::fs::read(&path) {
+            Ok(existing)
+                if existing.windows(2).any(|w| w == b"\r\n") && !text.contains("\r\n") =>
+            {
+                text.replace('\n', "\r\n")
+            }
+            _ => text,
+        };
         std::fs::write(&path, text).map_err(|e| format!("write MERGED {path}: {e}"))?;
         Ok(())
     }
@@ -194,6 +223,71 @@ impl SessionManager {
                 worktree_path: file.worktree_path.clone(),
                 kind,
                 resolved,
+                accepted_raw: false,
+                change_status: None,
+            },
+        );
+        self.order.lock().unwrap().push(id);
+        model
+    }
+
+    /// Open one compared file: local = blob at `ref_a`, incoming = blob at `ref_b`,
+    /// base = the current worktree content — so the initial result projection IS
+    /// the worktree file, and hunks show where each ref diverges from it. Binary
+    /// (or non-UTF8) files are listed but get no session. Returns the model for
+    /// text files.
+    pub fn open_compare_entry(
+        &self,
+        root: &str,
+        file: &discovery::ChangedFile,
+        ref_a: &str,
+        ref_b: &str,
+    ) -> Option<SessionModel> {
+        let path_at_a = file.old_path.as_deref().unwrap_or(&file.path);
+        let local_bytes = discovery::ref_blob(root, ref_a, path_at_a);
+        let incoming_bytes = discovery::ref_blob(root, ref_b, &file.path);
+        let worktree_path = std::path::Path::new(root)
+            .join(&file.path)
+            .to_string_lossy()
+            .into_owned();
+        let base_bytes = std::fs::read(&worktree_path).unwrap_or_default();
+
+        let label = match &file.old_path {
+            Some(old) => format!("{old} → {}", file.path),
+            None => file.path.clone(),
+        };
+        let id = self.next_id();
+        let binary = discovery::blob_is_binary(&local_bytes)
+            || discovery::blob_is_binary(&incoming_bytes)
+            || discovery::blob_is_binary(&base_bytes);
+
+        let (kind, model) = if binary {
+            (ConflictKind::Binary, None)
+        } else {
+            let session = MergeSession::open(
+                id.clone(),
+                &String::from_utf8_lossy(&local_bytes),
+                &String::from_utf8_lossy(&base_bytes),
+                &String::from_utf8_lossy(&incoming_bytes),
+                WhitespaceMode::None,
+            );
+            let model = session.to_model();
+            self.sessions.lock().unwrap().insert(id.clone(), session);
+            self.merged_paths
+                .lock()
+                .unwrap()
+                .insert(id.clone(), worktree_path.clone());
+            (ConflictKind::Text, Some(model))
+        };
+        self.entries.lock().unwrap().insert(
+            id.clone(),
+            MergeFileEntry {
+                path_label: label,
+                worktree_path,
+                kind,
+                resolved: false,
+                accepted_raw: false,
+                change_status: Some(file.status.clone()),
             },
         );
         self.order.lock().unwrap().push(id);
@@ -238,6 +332,7 @@ impl SessionManager {
             kind: entry.kind,
             resolved,
             remaining_conflicts: remaining,
+            change_status: entry.change_status.clone(),
         })
     }
 
@@ -336,6 +431,20 @@ impl SessionManager {
 
     /// Write a resolved file's result and stage it (incremental persist, R3/R4).
     pub fn save_and_stage(&self, session_id: &str) -> Result<(), String> {
+        // A raw accept (`accept_special`) already wrote blob bytes — or deleted the
+        // file — and staged it; rewriting from the lossy text session would corrupt
+        // a binary or resurrect the chosen deletion. Binary files are additionally
+        // never writable from text, whatever their resolved state.
+        let (kind, accepted_raw) = self
+            .entries
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .map(|e| (e.kind, e.accepted_raw))
+            .ok_or_else(|| format!("unknown entry: {session_id}"))?;
+        if accepted_raw || kind == ConflictKind::Binary {
+            return Ok(());
+        }
         self.backup_and_write(session_id)?;
         if let (Some(ctx), Some(label)) = (
             self.repo.lock().unwrap().as_ref(),
@@ -422,6 +531,7 @@ impl SessionManager {
         discovery::stage_path(&root, &label)?;
         if let Some(e) = self.entries.lock().unwrap().get_mut(session_id) {
             e.resolved = true;
+            e.accepted_raw = true;
         }
         Ok(())
     }
@@ -467,7 +577,16 @@ impl SessionManager {
         let session = map
             .get_mut(session_id)
             .ok_or_else(|| format!("unknown session: {session_id}"))?;
-        Ok(f(session))
+        let model = f(session);
+        drop(map);
+        // Any editor mutation supersedes a prior accept: the text session is the
+        // live resolution again, so saves must write it and resolved-ness must be
+        // re-derived from the session's remaining conflicts.
+        if let Some(e) = self.entries.lock().unwrap().get_mut(session_id) {
+            e.accepted_raw = false;
+            e.resolved = false;
+        }
+        Ok(model)
     }
 
     pub fn apply_change(&self, sid: &str, hunk_id: usize, from: &str) -> Result<SessionModel, String> {
@@ -693,5 +812,310 @@ mod tests {
         let written = std::fs::read_to_string(p("MERGED")).unwrap();
         assert!(written.contains("title: LOCAL"));
         assert!(!written.contains("conflict markers"));
+    }
+
+    #[test]
+    fn save_merged_matches_crlf_worktree_endings() {
+        let dir = std::env::temp_dir().join("mcr-test-crlf");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = |n: &str| dir.join(n).to_string_lossy().to_string();
+        // Sides are LF (as index blobs are under autocrlf) but the checkout on
+        // disk is CRLF; saving must not flip the worktree file's endings.
+        std::fs::write(p("LOCAL"), "title: LOCAL\nshared\n").unwrap();
+        std::fs::write(p("BASE"), "title: BASE\nshared\n").unwrap();
+        std::fs::write(p("REMOTE"), "title: REMOTE\nshared\n").unwrap();
+        std::fs::write(p("MERGED"), "<<< markers >>>\r\nshared\r\n").unwrap();
+
+        let m = SessionManager::new();
+        let files = MergeFiles {
+            local: p("LOCAL"),
+            base: p("BASE"),
+            remote: p("REMOTE"),
+            merged: p("MERGED"),
+        };
+        let model = m.open_files(&files).unwrap();
+        let conflict = model
+            .hunks
+            .iter()
+            .find(|h| h.category == mcr_core::Category::Conflicting)
+            .unwrap();
+        m.apply_change(&model.session_id, conflict.id, "local")
+            .unwrap();
+        m.save_merged(&model.session_id).unwrap();
+
+        let written = std::fs::read_to_string(p("MERGED")).unwrap();
+        assert!(written.contains("title: LOCAL\r\n"), "written = {written:?}");
+        assert!(!written.contains("shared\n\n"), "written = {written:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn raw_accept_blocks_text_rewrite_until_editor_mutation() {
+        let dir = std::env::temp_dir().join("mcr-test-rawaccept");
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("blob.bin").to_string_lossy().to_string();
+        std::fs::write(&target, b"\x00raw-bytes").unwrap();
+
+        let m = SessionManager::new();
+        let model = m.open("local\n", "base\n", "incoming\n", None);
+        let sid = model.session_id.clone();
+        m.merged_paths
+            .lock()
+            .unwrap()
+            .insert(sid.clone(), target.clone());
+        m.entries.lock().unwrap().insert(
+            sid.clone(),
+            MergeFileEntry {
+                path_label: "blob.bin".into(),
+                worktree_path: target.clone(),
+                kind: ConflictKind::DeleteModify,
+                resolved: true,
+                accepted_raw: true,
+                change_status: None,
+            },
+        );
+        m.order.lock().unwrap().push(sid.clone());
+
+        // finish() must not overwrite the raw accept with the text session.
+        m.finish().unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"\x00raw-bytes");
+
+        // An editor mutation supersedes the accept: the text session is live again.
+        let hunk = m.model(&sid).unwrap().hunks[0].id;
+        m.apply_change(&sid, hunk, "local").unwrap();
+        let e = m.entries.lock().unwrap().get(&sid).cloned().unwrap();
+        assert!(!e.accepted_raw);
+        assert!(!e.resolved);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two branches diverging on tracked files, for compare-mode tests.
+    /// main: f.txt="main", added.txt absent, gone.txt="keep"
+    /// feature: f.txt="feature", added.txt="new", gone.txt deleted
+    fn setup_compare_repo(dir: &Path) -> (String, String) {
+        std::fs::create_dir_all(dir).unwrap();
+        git_ok(dir, &["init", "-q"]);
+        git_ok(dir, &["config", "user.email", "t@example.com"]);
+        git_ok(dir, &["config", "user.name", "Test"]);
+        git_ok(dir, &["config", "commit.gpgsign", "false"]);
+        let write = |name: &str, body: &str| std::fs::write(dir.join(name), body).unwrap();
+        write("f.txt", "one\nmain\nthree\n");
+        write("gone.txt", "keep\n");
+        git_ok(dir, &["add", "."]);
+        git_ok(dir, &["commit", "-q", "-m", "base"]);
+        let main = String::from_utf8(
+            Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+        git_ok(dir, &["checkout", "-q", "-b", "feature"]);
+        write("f.txt", "one\nfeature\nthree\n");
+        write("added.txt", "new\n");
+        git_ok(dir, &["add", "."]);
+        git_ok(dir, &["rm", "-q", "gone.txt"]);
+        git_ok(dir, &["commit", "-q", "-am", "feature"]);
+        git_ok(dir, &["checkout", "-q", &main]);
+        (main, "feature".to_string())
+    }
+
+    #[test]
+    fn changed_paths_parses_statuses() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("mcr-cmp-paths-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (main, feature) = setup_compare_repo(&dir);
+        let root = dir.to_string_lossy().into_owned();
+
+        let mut files = discovery::changed_paths(&root, &main, &feature).unwrap();
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        let statuses: Vec<(&str, &str)> = files
+            .iter()
+            .map(|f| (f.path.as_str(), f.status.as_str()))
+            .collect();
+        assert_eq!(
+            statuses,
+            vec![("added.txt", "A"), ("f.txt", "M"), ("gone.txt", "D")]
+        );
+
+        // Rename detection carries the old path.
+        git_ok(&dir, &["checkout", "-q", "-b", "renamer"]);
+        git_ok(&dir, &["mv", "f.txt", "renamed.txt"]);
+        git_ok(&dir, &["commit", "-q", "-am", "rename"]);
+        let renamed = discovery::changed_paths(&root, &main, "renamer").unwrap();
+        let r = renamed.iter().find(|f| f.status == "R").expect("R entry");
+        assert_eq!(r.old_path.as_deref(), Some("f.txt"));
+        assert_eq!(r.path, "renamed.txt");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compare_result_is_worktree_and_save_does_not_stage() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("mcr-cmp-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (main, feature) = setup_compare_repo(&dir);
+        let root = dir.to_string_lossy().into_owned();
+        // Dirty the worktree so it differs from both refs.
+        std::fs::write(dir.join("f.txt"), "one\nworktree\nthree\n").unwrap();
+
+        let m = SessionManager::new();
+        let f = discovery::ChangedFile {
+            status: "M".into(),
+            path: "f.txt".into(),
+            old_path: None,
+        };
+        let model = m.open_compare_entry(&root, &f, &main, &feature).unwrap();
+        // The result pane starts as the CURRENT worktree content.
+        assert_eq!(model.panes.result.join("\n"), "one\nworktree\nthree\n");
+        assert_eq!(model.panes.local.join("\n"), "one\nmain\nthree\n");
+        assert_eq!(model.panes.incoming.join("\n"), "one\nfeature\nthree\n");
+
+        // Take the feature side for the diverging hunk and save.
+        let hunk = model
+            .hunks
+            .iter()
+            .find(|h| h.category == mcr_core::Category::Conflicting)
+            .expect("both refs differ from worktree");
+        m.apply_change(&model.session_id, hunk.id, "incoming").unwrap();
+        m.save_merged(&model.session_id).unwrap();
+
+        let written = std::fs::read_to_string(dir.join("f.txt")).unwrap();
+        assert_eq!(written, "one\nfeature\nthree\n");
+        // Nothing staged, no .orig backup.
+        let staged = Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(["diff", "--cached", "--name-only"])
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&staged.stdout).trim().is_empty());
+        assert!(!dir.join("f.txt.orig").exists());
+
+        let summary = m.summary(&model.session_id).unwrap();
+        assert_eq!(summary.change_status.as_deref(), Some("M"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compare_added_and_deleted_sides_open_with_empty_panes() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("mcr-cmp-ad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (main, feature) = setup_compare_repo(&dir);
+        let root = dir.to_string_lossy().into_owned();
+
+        let m = SessionManager::new();
+        // added.txt exists only at `feature` (and not in the main-checkout worktree).
+        let added = discovery::ChangedFile {
+            status: "A".into(),
+            path: "added.txt".into(),
+            old_path: None,
+        };
+        let model = m.open_compare_entry(&root, &added, &main, &feature).unwrap();
+        assert_eq!(model.panes.local.join("\n"), "");
+        assert_eq!(model.panes.incoming.join("\n"), "new\n");
+
+        // gone.txt exists at `main` but not at `feature`.
+        let gone = discovery::ChangedFile {
+            status: "D".into(),
+            path: "gone.txt".into(),
+            old_path: None,
+        };
+        let model = m.open_compare_entry(&root, &gone, &main, &feature).unwrap();
+        assert_eq!(model.panes.local.join("\n"), "keep\n");
+        assert_eq!(model.panes.incoming.join("\n"), "");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compare_binary_listed_without_session() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("mcr-cmp-bin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (main, feature) = setup_compare_repo(&dir);
+        let root = dir.to_string_lossy().into_owned();
+        git_ok(&dir, &["checkout", "-q", "-b", "bin"]);
+        std::fs::write(dir.join("blob.bin"), b"\x00\x01\x02").unwrap();
+        git_ok(&dir, &["add", "."]);
+        git_ok(&dir, &["commit", "-q", "-m", "bin"]);
+        git_ok(&dir, &["checkout", "-q", &main]);
+        let _ = feature;
+
+        let m = SessionManager::new();
+        let f = discovery::ChangedFile {
+            status: "A".into(),
+            path: "blob.bin".into(),
+            old_path: None,
+        };
+        assert!(m.open_compare_entry(&root, &f, &main, "bin").is_none());
+        let summaries = m.summaries();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].kind, ConflictKind::Binary);
+        assert_eq!(summaries[0].change_status.as_deref(), Some("A"));
+        assert!(m.model(&summaries[0].session_id).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn merge_summary_serializes_without_change_status() {
+        let s = SessionSummary {
+            session_id: "s".into(),
+            path_label: "a.txt".into(),
+            kind: ConflictKind::Text,
+            resolved: false,
+            remaining_conflicts: 1,
+            change_status: None,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(!json.contains("change_status"), "json = {json}");
+    }
+
+    #[test]
+    fn non_utf8_sides_classify_as_binary() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("mcr-latin1-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git_ok(&dir, &["init", "-q"]);
+        git_ok(&dir, &["config", "user.email", "t@example.com"]);
+        git_ok(&dir, &["config", "user.name", "Test"]);
+        git_ok(&dir, &["config", "commit.gpgsign", "false"]);
+        // Latin-1 "café" — no NUL bytes, but invalid UTF-8; a lossy text session
+        // would corrupt it, so it must route through the raw-accept path.
+        std::fs::write(dir.join("l1.txt"), b"caf\xe9 base\n").unwrap();
+        git_ok(&dir, &["add", "."]);
+        git_ok(&dir, &["commit", "-q", "-m", "base"]);
+        git_ok(&dir, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(dir.join("l1.txt"), b"caf\xe9 feature\n").unwrap();
+        git_ok(&dir, &["commit", "-q", "-am", "feature"]);
+        git_ok(&dir, &["checkout", "-q", "-"]);
+        std::fs::write(dir.join("l1.txt"), b"caf\xe9 main\n").unwrap();
+        git_ok(&dir, &["commit", "-q", "-am", "main"]);
+        git_ok(&dir, &["merge", "feature"]);
+
+        let root = discovery::repo_root(&dir.join("l1.txt").to_string_lossy()).unwrap();
+        assert_eq!(discovery::conflict_kind(&root, "l1.txt"), ConflictKind::Binary);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

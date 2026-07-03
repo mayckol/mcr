@@ -1,8 +1,6 @@
-import { HighlightStyle, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
+import { StreamLanguage } from "@codemirror/language";
 import type { StreamParser } from "@codemirror/language";
 import type { Extension } from "@codemirror/state";
-import { tags as t } from "@lezer/highlight";
-import { TOKYO } from "../theme/tokyo";
 
 import { javascript, json, typescript } from "@codemirror/legacy-modes/mode/javascript";
 import { c, cpp, java, csharp, kotlin, scala, objectiveC, dart } from "@codemirror/legacy-modes/mode/clike";
@@ -23,26 +21,6 @@ import { dockerFile } from "@codemirror/legacy-modes/mode/dockerfile";
 import { properties } from "@codemirror/legacy-modes/mode/properties";
 import { standardSQL } from "@codemirror/legacy-modes/mode/sql";
 import { diff } from "@codemirror/legacy-modes/mode/diff";
-
-// Tokyo Night syntax palette. Distinct hues for each token role; comments
-// italicised, keywords in purple, strings in green — the canonical Tokyo Night
-// reading so merged code looks like it does in the user's editor.
-const tokyoHighlight = HighlightStyle.define([
-  { tag: [t.comment, t.lineComment, t.blockComment], color: TOKYO.comment, fontStyle: "italic" },
-  { tag: [t.keyword, t.modifier, t.controlKeyword, t.moduleKeyword], color: TOKYO.purple },
-  { tag: [t.operator, t.operatorKeyword, t.compareOperator, t.logicOperator], color: TOKYO.cyan },
-  { tag: [t.string, t.special(t.string), t.regexp], color: TOKYO.green },
-  { tag: [t.number, t.bool, t.null, t.atom], color: TOKYO.orange },
-  { tag: [t.function(t.variableName), t.function(t.propertyName), t.macroName], color: TOKYO.blue },
-  { tag: [t.propertyName, t.attributeName], color: TOKYO.cyan },
-  { tag: [t.typeName, t.className, t.namespace], color: TOKYO.teal },
-  { tag: [t.definition(t.variableName), t.variableName, t.local(t.variableName)], color: TOKYO.fg },
-  { tag: [t.tagName, t.angleBracket], color: TOKYO.red },
-  { tag: [t.heading, t.strong], color: TOKYO.blue, fontWeight: "600" },
-  { tag: [t.link, t.url], color: TOKYO.cyan, textDecoration: "underline" },
-  { tag: t.invalid, color: TOKYO.red },
-  { tag: [t.meta, t.documentMeta, t.annotation], color: TOKYO.fgGutter },
-]);
 
 const lang = (parser: StreamParser<unknown>): Extension => StreamLanguage.define(parser);
 
@@ -78,18 +56,15 @@ const BY_NAME: Record<string, StreamParser<unknown>> = {
   dockerfile: dockerFile, ".env": properties, makefile: properties, ".gitconfig": properties,
 };
 
-const SYNTAX = syntaxHighlighting(tokyoHighlight);
-
 /**
- * The highlighting extension for a given filename. Always returns the Tokyo
- * Night highlight style; when the extension is recognised it also installs the
- * matching language parser so tokens actually get coloured. Unknown types fall
- * back to highlight-style-only (no-op), keeping plain text readable.
+ * The language parser extension for a given filename, so tokens get typed and
+ * the theme's highlight style (installed separately, see theme/editor.ts) can
+ * color them. Unknown types return an empty extension — plain text.
  */
 export function syntaxFor(fileName: string | null | undefined): Extension {
-  if (!fileName) return SYNTAX;
+  if (!fileName) return [];
   const name = fileName.toLowerCase();
   const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : "";
   const parser = BY_EXT[ext] ?? BY_NAME[name];
-  return parser ? [lang(parser), SYNTAX] : SYNTAX;
+  return parser ? lang(parser) : [];
 }

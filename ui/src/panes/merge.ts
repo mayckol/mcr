@@ -3,7 +3,10 @@ import { EditorView, lineNumbers } from "@codemirror/view";
 import type { PaneName, SessionModel } from "../ipc/types";
 import { hunkDecorations, gutterBands, setHunks, viewHolder } from "../highlight/decorations";
 import { fillerField, planFillers, setFillers } from "./fillers";
-import { tokyoNight } from "../theme/tokyo";
+import { editorTheme } from "../theme/editor";
+import { themeById } from "../theme/themes";
+import { storedThemeId } from "../theme/manager";
+import type { ThemePalette } from "../theme/themes";
 import { syntaxFor } from "../highlight/syntax";
 
 export interface MergeRoots {
@@ -23,7 +26,8 @@ function makeView(
   pane: PaneName,
   editable: boolean,
   cb: MergeCallbacks,
-  langGuard: Compartment
+  langGuard: Compartment,
+  themeGuard: Compartment
 ): EditorView {
   const editGuard = new Compartment();
   const view = new EditorView({
@@ -31,7 +35,7 @@ function makeView(
     state: EditorState.create({
       doc: "",
       extensions: [
-        tokyoNight,
+        themeGuard.of(editorTheme(themeById(storedThemeId()))),
         langGuard.of(syntaxFor(null)),
         lineNumbers(),
         hunkDecorations(pane),
@@ -69,11 +73,12 @@ export class MergeEditor {
   readonly incoming: EditorView;
 
   private readonly langGuard = new Compartment();
+  private readonly themeGuard = new Compartment();
 
   constructor(roots: MergeRoots, cb: MergeCallbacks) {
-    this.local = makeView(roots.local, "local", false, cb, this.langGuard);
-    this.result = makeView(roots.result, "result", true, cb, this.langGuard);
-    this.incoming = makeView(roots.incoming, "incoming", false, cb, this.langGuard);
+    this.local = makeView(roots.local, "local", false, cb, this.langGuard, this.themeGuard);
+    this.result = makeView(roots.result, "result", true, cb, this.langGuard, this.themeGuard);
+    this.incoming = makeView(roots.incoming, "incoming", false, cb, this.langGuard, this.themeGuard);
   }
 
   views(): EditorView[] {
@@ -85,6 +90,14 @@ export class MergeEditor {
     const ext = syntaxFor(fileName);
     for (const view of this.views()) {
       view.dispatch({ effects: this.langGuard.reconfigure(ext) });
+    }
+  }
+
+  /** Re-theme all three panes (editor chrome + syntax palette). */
+  setTheme(palette: ThemePalette) {
+    const ext = editorTheme(palette);
+    for (const view of this.views()) {
+      view.dispatch({ effects: this.themeGuard.reconfigure(ext) });
     }
   }
 

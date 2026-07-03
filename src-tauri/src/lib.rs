@@ -2,27 +2,97 @@ mod commands;
 mod discovery;
 mod manager;
 
-use manager::{DiscoveredFile, Launch, MergeFiles, SessionManager};
+use manager::{CompareSpec, DiscoveredFile, Launch, MergeFiles, SessionManager};
 
-/// Parse Git's mergetool invocation: `mcr <LOCAL> <BASE> <REMOTE> <MERGED>`.
-/// Flags (anything starting with `-`) are ignored so the positional contract holds.
-///
-/// Git hands MCR one file per invocation, so when launched inside a worktree we
-/// discover the FULL conflicted set ourselves (research R1/R5); when launched
-/// outside a worktree we fall back to the single file Git passed.
-fn parse_launch() -> Launch {
-    let paths: Vec<String> = std::env::args()
-        .skip(1)
-        .filter(|a| !a.starts_with('-'))
-        .collect();
-    if paths.len() < 4 {
-        return Launch::default();
+/// What the command line asked for. Stable CLI contract (editors/IDEs drive it):
+/// `mcr <LOCAL> <BASE> <REMOTE> <MERGED>` (git mergetool) or
+/// `mcr diff <refA> <refB> [dir]` (compare two refs; `dir` anchors the repo for
+/// launchers that cannot preserve the caller's CWD, e.g. the AppImage wrapper).
+enum ParsedArgs {
+    Mergetool(MergeFiles),
+    Compare {
+        ref_a: String,
+        ref_b: String,
+        dir: Option<String>,
+    },
+    CompareUsage,
+    Demo,
+}
+
+fn classify_args(args: &[String]) -> ParsedArgs {
+    if args.first().map(String::as_str) == Some("diff") {
+        let rest = &args[1..];
+        return match rest.len() {
+            2 | 3 => ParsedArgs::Compare {
+                ref_a: rest[0].clone(),
+                ref_b: rest[1].clone(),
+                dir: rest.get(2).cloned(),
+            },
+            _ => ParsedArgs::CompareUsage,
+        };
     }
-    let passed = MergeFiles {
+    // Mergetool contract: flags (anything starting with `-`) are ignored so the
+    // positional contract holds.
+    let paths: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
+    if paths.len() < 4 {
+        return ParsedArgs::Demo;
+    }
+    ParsedArgs::Mergetool(MergeFiles {
         local: paths[0].clone(),
         base: paths[1].clone(),
         remote: paths[2].clone(),
         merged: paths[3].clone(),
+    })
+}
+
+/// Resolve a compare launch or exit(2) with a usage error on stderr — argument
+/// errors must never open a window (scriptable contract).
+fn compare_launch(ref_a: String, ref_b: String, dir: Option<String>) -> Launch {
+    let usage = "usage: mcr diff <refA> <refB> [dir]";
+    let root = match &dir {
+        Some(d) => discovery::repo_root(&std::path::Path::new(d).join(".").to_string_lossy()),
+        None => discovery::repo_root_cwd(),
+    };
+    let Some(root) = root else {
+        eprintln!("mcr diff: not inside a git repository\n{usage}");
+        std::process::exit(2);
+    };
+    for r in [&ref_a, &ref_b] {
+        if !discovery::resolves_to_commit(&root, r) {
+            eprintln!("mcr diff: '{r}' does not resolve to a commit (use two refs, not a range)\n{usage}");
+            std::process::exit(2);
+        }
+    }
+    let files = match discovery::changed_paths(&root, &ref_a, &ref_b) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("mcr diff: {e}");
+            std::process::exit(2);
+        }
+    };
+    Launch {
+        passed: None,
+        repo_root: Some(root),
+        files: Vec::new(),
+        keep_backup: false,
+        compare: Some(CompareSpec { ref_a, ref_b, files }),
+    }
+}
+
+/// Parse the invocation. Git hands MCR one file per mergetool run, so when
+/// launched inside a worktree we discover the FULL conflicted set ourselves
+/// (research R1/R5); when launched outside a worktree we fall back to the single
+/// file Git passed.
+fn parse_launch() -> Launch {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let passed = match classify_args(&args) {
+        ParsedArgs::Demo => return Launch::default(),
+        ParsedArgs::CompareUsage => {
+            eprintln!("usage: mcr diff <refA> <refB> [dir]");
+            std::process::exit(2);
+        }
+        ParsedArgs::Compare { ref_a, ref_b, dir } => return compare_launch(ref_a, ref_b, dir),
+        ParsedArgs::Mergetool(files) => files,
     };
     match discovery::repo_root(&passed.merged) {
         Some(root) => {
@@ -43,6 +113,7 @@ fn parse_launch() -> Launch {
                 repo_root: Some(root),
                 files,
                 keep_backup,
+                compare: None,
             }
         }
         None => Launch {
@@ -50,13 +121,44 @@ fn parse_launch() -> Launch {
             repo_root: None,
             files: Vec::new(),
             keep_backup: false,
+            compare: None,
         },
     }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default();
+    // macOS: add "Settings…" (Cmd+,) to the app menu, in the native position
+    // right below About. It emits an event the webview turns into the settings
+    // panel. Other platforms have no default app menu — the toolbar gear and
+    // Ctrl+, cover them.
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::menu::{Menu, MenuItemBuilder, PredefinedMenuItem};
+        use tauri::Emitter;
+        builder = builder
+            .menu(|handle| {
+                let menu = Menu::default(handle)?;
+                if let Some(app_menu) = menu.items()?.first().and_then(|i| i.as_submenu().cloned()) {
+                    let settings = MenuItemBuilder::with_id("mcr-settings", "Settings…")
+                        .accelerator("Cmd+,")
+                        .build(handle)?;
+                    let sep = PredefinedMenuItem::separator(handle)?;
+                    // Default app menu: [About, separator, Services, ...] — slot in
+                    // after About's separator.
+                    app_menu.insert_items(&[&sep, &settings], 2)?;
+                }
+                Ok(menu)
+            })
+            .on_menu_event(|app, event| {
+                if event.id() == "mcr-settings" {
+                    let _ = app.emit("mcr://open-settings", ());
+                }
+            });
+    }
+    builder
         .manage(SessionManager::new())
         .manage(parse_launch())
         // Closing the window with the native control is an abort, not a save: exit
@@ -97,6 +199,76 @@ pub fn run() {
             commands::exit_code,
             commands::quit,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running MCR merge editor");
+        .build(tauri::generate_context!())
+        .expect("error while building MCR merge editor")
+        // Cmd+Q (macOS app-menu quit) and other app-level exits never reach the
+        // window's CloseRequested handler; without this they'd fall through to a
+        // clean status-0 exit and Git would stage an unresolved file.
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                use tauri::Manager;
+                let is_merge = app.state::<Launch>().passed.is_some();
+                let resolved = app.state::<SessionManager>().git_passed_resolved();
+                let code = if is_merge && !resolved { 1 } else { 0 };
+                std::process::exit(code);
+            }
+        });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(args: &[&str]) -> Vec<String> {
+        args.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn classify_diff_two_refs() {
+        match classify_args(&v(&["diff", "main", "feature"])) {
+            ParsedArgs::Compare { ref_a, ref_b, dir } => {
+                assert_eq!(ref_a, "main");
+                assert_eq!(ref_b, "feature");
+                assert!(dir.is_none());
+            }
+            _ => panic!("expected Compare"),
+        }
+    }
+
+    #[test]
+    fn classify_diff_with_dir_anchor() {
+        match classify_args(&v(&["diff", "v1.0", "abc123", "/repo"])) {
+            ParsedArgs::Compare { dir, .. } => assert_eq!(dir.as_deref(), Some("/repo")),
+            _ => panic!("expected Compare"),
+        }
+    }
+
+    #[test]
+    fn classify_diff_wrong_arity_is_usage() {
+        assert!(matches!(
+            classify_args(&v(&["diff", "main"])),
+            ParsedArgs::CompareUsage
+        ));
+        assert!(matches!(
+            classify_args(&v(&["diff", "a", "b", "c", "d"])),
+            ParsedArgs::CompareUsage
+        ));
+    }
+
+    #[test]
+    fn classify_mergetool_four_paths_with_flags() {
+        match classify_args(&v(&["--flag", "L", "B", "R", "M"])) {
+            ParsedArgs::Mergetool(f) => {
+                assert_eq!(f.local, "L");
+                assert_eq!(f.merged, "M");
+            }
+            _ => panic!("expected Mergetool"),
+        }
+    }
+
+    #[test]
+    fn classify_too_few_paths_is_demo() {
+        assert!(matches!(classify_args(&v(&[])), ParsedArgs::Demo));
+        assert!(matches!(classify_args(&v(&["a", "b"])), ParsedArgs::Demo));
+    }
 }

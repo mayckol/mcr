@@ -18,11 +18,14 @@ export interface OpenInput {
 }
 
 export interface Bootstrap {
-  mode: "merge" | "demo";
+  mode: "merge" | "demo" | "compare";
   files: SessionSummary[];
   progress: SessionProgress;
   active: SessionModel | null;
   file_name?: string | null;
+  /** Compare mode only: the two refs being compared. */
+  ref_a?: string | null;
+  ref_b?: string | null;
 }
 
 export const ipc = {

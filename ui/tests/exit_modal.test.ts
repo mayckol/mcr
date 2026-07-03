@@ -33,4 +33,22 @@ describe("ExitConfirmModal (FR-008)", () => {
     expect(onConfirm).toHaveBeenCalledTimes(1);
     expect((document.querySelector(".mcr-modal-overlay") as HTMLElement).style.display).toBe("none");
   });
+
+  it("confirm() renders a generic prompt and only confirms on OK", () => {
+    const modal = new ExitConfirmModal();
+    const onConfirm = vi.fn();
+    modal.confirm({ title: "Abort merge?", body: "Exit without applying.", okLabel: "Abort", onConfirm });
+    const overlay = document.querySelector(".mcr-modal-overlay") as HTMLElement;
+    expect(overlay.style.display).toBe("flex");
+    expect(overlay.querySelector(".mcr-modal-head")!.textContent).toContain("Abort merge?");
+    expect(overlay.querySelector(".mcr-confirm-ok")!.textContent).toBe("Abort");
+
+    (overlay.querySelector(".mcr-confirm-cancel") as HTMLElement).click();
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(overlay.style.display).toBe("none");
+
+    modal.confirm({ title: "Abort merge?", body: "Exit without applying.", okLabel: "Abort", onConfirm });
+    (document.querySelector(".mcr-confirm-ok") as HTMLElement).click();
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
 });

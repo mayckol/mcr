@@ -22,11 +22,40 @@ pub struct Bootstrap {
     pub active: Option<SessionModel>,
     /// Basename of the active file, so the UI can pick a syntax highlighter.
     pub file_name: Option<String>,
+    /// Compare mode only: the two refs being compared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ref_a: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ref_b: Option<String>,
 }
 
 /// First call from the UI. Discovers the conflicted set and opens the session(s).
 #[tauri::command]
 pub fn bootstrap(mgr: Mgr, launch: State<Launch>) -> Result<Bootstrap, String> {
+    // Compare launch: no repo ctx (staging/backup stay inert) and no git-passed
+    // file (exit code stays 0 — compare has no mergetool contract).
+    if let (Some(root), Some(cmp)) = (&launch.repo_root, &launch.compare) {
+        let mut single_model = None;
+        let mut active_label = None;
+        let single = cmp.files.len() == 1;
+        for f in &cmp.files {
+            let model = mgr.open_compare_entry(root, f, &cmp.ref_a, &cmp.ref_b);
+            if single {
+                active_label = Some(f.path.clone());
+                single_model = model;
+            }
+        }
+        return Ok(Bootstrap {
+            mode: "compare".into(),
+            files: mgr.summaries(),
+            progress: mgr.progress(),
+            active: single_model,
+            file_name: active_label.as_deref().and_then(basename),
+            ref_a: Some(cmp.ref_a.clone()),
+            ref_b: Some(cmp.ref_b.clone()),
+        });
+    }
+
     let Some(passed) = &launch.passed else {
         return Ok(Bootstrap {
             mode: "demo".into(),
@@ -34,6 +63,8 @@ pub fn bootstrap(mgr: Mgr, launch: State<Launch>) -> Result<Bootstrap, String> {
             progress: mgr.progress(),
             active: None,
             file_name: None,
+            ref_a: None,
+            ref_b: None,
         });
     };
 
@@ -49,6 +80,8 @@ pub fn bootstrap(mgr: Mgr, launch: State<Launch>) -> Result<Bootstrap, String> {
                 progress: mgr.progress(),
                 active: Some(model),
                 file_name: basename(&passed.merged),
+                ref_a: None,
+                ref_b: None,
             });
         }
     };
@@ -71,6 +104,8 @@ pub fn bootstrap(mgr: Mgr, launch: State<Launch>) -> Result<Bootstrap, String> {
         progress: mgr.progress(),
         active: single_model,
         file_name: active_label.as_deref().and_then(basename),
+        ref_a: None,
+        ref_b: None,
     })
 }
 

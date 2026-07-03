@@ -8,15 +8,14 @@ import { Shortcuts } from "./shortcuts/keymap";
 import { ShortcutsPanel } from "./shortcuts/panel";
 import { FileList } from "./files/list";
 import { ExitConfirmModal } from "./confirm/modal";
-import { CATEGORY_COLORS } from "./highlight/theme";
+import { SettingsPanel } from "./settings/panel";
+import { applyTheme, storedThemeId } from "./theme/manager";
+import { listen } from "@tauri-apps/api/event";
 import type { SessionModel, SessionSummary, SessionProgress, Side } from "./ipc/types";
 
-// Mirror the change-band palette into CSS vars so the gutter tint (styled in CSS)
-// always equals the content band (styled inline from the same source) — a row can
-// never be gutter-yellow / content-red. One source of truth: CATEGORY_COLORS.
-for (const [cat, c] of Object.entries(CATEGORY_COLORS)) {
-  document.documentElement.style.setProperty(`--band-${cat}`, c.band);
-}
+// Paint the persisted theme before any editor mounts: chrome, bands, gutters,
+// and connectors all read the CSS vars this sets — one source of truth.
+applyTheme(storedThemeId());
 
 const inTauri = "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
 
@@ -24,6 +23,11 @@ const $ = (id: string) => document.getElementById(id)!;
 
 let model: SessionModel | undefined;
 let currentHunk: number | null = null;
+
+// How the app was launched: git mergetool, `mcr diff <refA> <refB>`, or demo.
+let appMode: "merge" | "compare" | "demo" = "demo";
+// Compare mode: sessions changed since their last save to the working tree.
+const dirty = new Set<string>();
 
 // Multi-file session state. `files` is empty for demo / single-file fallback.
 let files: SessionSummary[] = [];
@@ -41,6 +45,7 @@ const merge = new MergeEditor(
       if (!inTauri || !model) return;
       try {
         await ipc.editFullResult(model.session_id, fullText);
+        if (appMode === "compare") dirty.add(model.session_id);
       } catch (e) {
         $("status").textContent = `Edit failed: ${e}`;
       }
@@ -113,6 +118,7 @@ function act(fn: () => Promise<SessionModel>) {
   if (!model) return;
   fn()
     .then(async (next) => {
+      if (appMode === "compare") dirty.add(next.session_id);
       apply(next);
       await afterMutate(next);
     })
@@ -125,7 +131,8 @@ function act(fn: () => Promise<SessionModel>) {
 // resolved (incremental persist, FR-017) and refresh the list/progress (FR-005/006).
 async function afterMutate(next: SessionModel) {
   if (!inTauri || files.length === 0) return;
-  if (next.status.fully_resolved) {
+  // Compare mode persists only on explicit Save — never auto-stage.
+  if (appMode !== "compare" && next.status.fully_resolved) {
     try {
       await ipc.saveAndStage(next.session_id);
     } catch (e) {
@@ -145,10 +152,19 @@ async function refreshList() {
 
 function renderStatus() {
   if (!model) {
-    if (files.length > 0) $("status").textContent = `${progress.remaining_conflicts} file(s) with conflicts`;
+    if (files.length > 0) {
+      $("status").textContent =
+        appMode === "compare"
+          ? `${progress.total} file(s) changed`
+          : `${progress.remaining_conflicts} file(s) with conflicts`;
+    }
     return;
   }
   const s = model.status;
+  if (appMode === "compare") {
+    $("status").textContent = `${s.total_hunks} difference(s)`;
+    return;
+  }
   $("status").textContent = s.fully_resolved
     ? `Resolved — ${s.total_hunks} changes`
     : `${s.remaining_conflicts} conflict(s) remaining of ${s.total_hunks} changes`;
@@ -185,13 +201,26 @@ shortcuts.attach(window);
 const shortcutsPanel = new ShortcutsPanel(shortcuts);
 $("shortcuts").addEventListener("click", () => shortcutsPanel.open());
 
+// Settings (Appearance). Opened from the gear, Cmd/Ctrl+,, or the native
+// macOS app-menu "Settings…" item (which emits mcr://open-settings).
+const settingsPanel = new SettingsPanel((id) => applyTheme(id, (p) => merge.setTheme(p)));
+$("settings").addEventListener("click", () => settingsPanel.open());
+window.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+    e.preventDefault();
+    settingsPanel.open();
+  }
+});
+if (inTauri) void listen("mcr://open-settings", () => settingsPanel.open());
+
 // Multi-file navigator + exit-confirmation modal.
 const fileList = new FileList($("file-list"), { onSelect: selectFile, onAccept });
 const exitModal = new ExitConfirmModal();
 
 function showFileList(on: boolean) {
   $("file-list").style.display = on ? "flex" : "none";
-  $("next-file").style.display = on ? "inline-block" : "none";
+  // "Next unresolved" is a merge-only affordance.
+  $("next-file").style.display = on && appMode === "merge" ? "inline-block" : "none";
 }
 
 // Open a file from the list in the shared three-pane editor. Special (non-text)
@@ -203,7 +232,10 @@ async function selectFile(id: string) {
   // and delete/modify all reconstruct as text sides, so they open in the editor:
   // a deleted side renders as an empty (black) pane against the other side's diff.
   if (summary && summary.kind === "binary") {
-    $("status").textContent = `${summary.path_label}: binary conflict — use Accept Ours / Theirs`;
+    $("status").textContent =
+      appMode === "compare"
+        ? `${summary.path_label}: binary file — cannot compare as text`
+        : `${summary.path_label}: binary conflict — use Accept Ours / Theirs`;
     fileList.render(files, activeFile, progress);
     return;
   }
@@ -245,10 +277,22 @@ $("next-file").addEventListener("click", gotoNextUnresolved);
 // the multi-file path stages resolved files and confirms before leaving any
 // conflicts behind, exiting with the code Git expects for the file it passed.
 async function exitFlow(abort: boolean) {
+  if (abort) {
+    // Abort must never save, stage, or exit 0 — a non-zero exit tells Git the
+    // passed file stays conflicted. Files already staged this session are kept
+    // by Git; everything in-progress is discarded, hence the confirmation.
+    exitModal.confirm({
+      title: "Abort merge?",
+      body:
+        "Exit without applying. The file stays conflicted for Git; unsaved " +
+        "resolutions in this window are discarded.",
+      okLabel: "Abort",
+      onConfirm: () => void ipc.quit(1),
+    });
+    return;
+  }
   if (files.length === 0) {
-    if (abort) {
-      await ipc.quit(1);
-    } else if (model) {
+    if (model) {
       try {
         await ipc.saveMerged(model.session_id);
         await ipc.quit(0);
@@ -288,24 +332,82 @@ new ResizeObserver(scheduleRefresh).observe(container);
 window.addEventListener("resize", scheduleRefresh);
 if (document.fonts?.ready) document.fonts.ready.then(scheduleRefresh);
 
+// Compare mode: Save writes every changed session to its working-tree file (the
+// window stays open); Close exits 0, confirming first when edits are unsaved.
+async function compareSave() {
+  const ids = [...dirty];
+  try {
+    for (const id of ids) {
+      await ipc.saveMerged(id);
+      dirty.delete(id);
+    }
+    $("status").textContent = `Saved ${ids.length} file(s) to working tree`;
+  } catch (e) {
+    $("status").textContent = `Save failed: ${e}`;
+  }
+}
+
+function compareClose() {
+  if (dirty.size > 0) {
+    exitModal.confirm({
+      title: "Close with unsaved changes?",
+      body: `${dirty.size} file(s) have edits that were not saved to the working tree. Closing discards them.`,
+      okLabel: "Close",
+      cancelLabel: "Keep editing",
+      onConfirm: () => void ipc.quit(0),
+    });
+    return;
+  }
+  void ipc.quit(0);
+}
+
 // Footer action bar. Accept Left/Right apply all non-conflicting changes from a
 // side; Apply writes the result to Git's MERGED file and exits 0; Cancel aborts
-// with a non-zero status that tells Git the merge was not resolved.
+// with a non-zero status that tells Git the merge was not resolved. In compare
+// mode the same buttons become Save / Close.
 $("foot-accept-left").addEventListener("click", actions.applyLeft);
 $("foot-accept-right").addEventListener("click", actions.applyRight);
-$("foot-apply").addEventListener("click", () => exitFlow(false));
-$("foot-cancel").addEventListener("click", () => exitFlow(true));
+$("foot-apply").addEventListener("click", () => {
+  if (appMode === "compare") void compareSave();
+  else void exitFlow(false);
+});
+$("foot-cancel").addEventListener("click", () => {
+  if (appMode === "compare") compareClose();
+  else void exitFlow(true);
+});
 
 function setMergeToolMode(on: boolean) {
   $("merge-actions").style.display = on ? "flex" : "none";
   $("footbar").style.display = on ? "flex" : "none";
 }
 
+function setCompareMode(refA: string, refB: string) {
+  $("merge-actions").style.display = "none";
+  $("footbar").style.display = "flex";
+  $("foot-accept-left").style.display = "none";
+  $("foot-accept-right").style.display = "none";
+  const save = $("foot-apply");
+  save.textContent = "Save";
+  save.title = "Write the result to the working tree";
+  const close = $("foot-cancel");
+  close.textContent = "Close";
+  close.title = "Close the compare window";
+  $("title-local").textContent = refA;
+  $("title-result").textContent = "Working tree";
+  $("title-incoming").textContent = refB;
+  document.title = `MCR — ${refA} ↔ ${refB}`;
+}
+
 async function boot() {
   if (inTauri) {
     const b = await ipc.bootstrap();
-    if (b.mode === "merge") {
-      setMergeToolMode(true);
+    if (b.mode === "merge" || b.mode === "compare") {
+      appMode = b.mode;
+      if (b.mode === "compare") {
+        setCompareMode(b.ref_a ?? "A", b.ref_b ?? "B");
+      } else {
+        setMergeToolMode(true);
+      }
       files = b.files;
       progress = b.progress;
       // The list is the entry point only when more than one file conflicts
@@ -319,6 +421,8 @@ async function boot() {
         merge.setLanguage(b.file_name);
         apply(b.active);
         focusFirstChange();
+      } else if (b.mode === "compare" && files.length === 0) {
+        $("status").textContent = `No differences between ${b.ref_a} and ${b.ref_b}`;
       } else {
         // More than one file: show the list first, no editor yet (FR-001).
         renderStatus();

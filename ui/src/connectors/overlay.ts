@@ -117,9 +117,11 @@ export class ConnectorOverlay {
     ].join(" ");
     void stroke;
     path.setAttribute("d", d);
-    path.setAttribute("fill", fill);
-    path.setAttribute("fill-opacity", strong ? "1" : "0.6");
-    path.setAttribute("stroke", "none");
+    // Style properties, not presentation attributes: the fill is a CSS var()
+    // reference (theme-driven), which attributes don't resolve.
+    path.style.fill = fill;
+    path.style.fillOpacity = strong ? "1" : "0.6";
+    path.style.stroke = "none";
     this.svg.appendChild(path);
   }
 

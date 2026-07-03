@@ -43,7 +43,7 @@ uninstall() {
   case "$os_raw" in
     Darwin)
       rm -rf "/Applications/MCR.app" 2>/dev/null || true
-      rm -f "$PREFIX/bin/mcr-mergetool" 2>/dev/null || true
+      rm -f "$PREFIX/bin/mcr" "$PREFIX/bin/mcr-mergetool" 2>/dev/null || true
       ;;
     Linux)
       rm -f "$PREFIX/bin/mcr" "$PREFIX/bin/mcr.AppImage" "$PREFIX/bin/mcr-mergetool" 2>/dev/null || true
@@ -143,7 +143,9 @@ case "$os_raw" in
     log "downloading $ASSET"
     $DL "$BASE/$ASSET" > "$TMP/app.dmg" || fail "download failed: $BASE/$ASSET"
     log "mounting"
-    MNT="$(hdiutil attach -nobrowse -quiet "$TMP/app.dmg" | tail -1 | awk '{ $1=""; $2=""; sub(/^  */,""); print }')"
+    # No -quiet: it silences the mount table on stdout, which is what we parse.
+    MNT="$(hdiutil attach -nobrowse "$TMP/app.dmg" | tail -1 | awk '{ $1=""; $2=""; sub(/^  */,""); print }')"
+    [ -n "$MNT" ] || fail "could not determine dmg mount point"
     [ -d "$MNT/MCR.app" ] || { hdiutil detach -quiet "$MNT" 2>/dev/null || true; fail "MCR.app not found in dmg"; }
     rm -rf /Applications/MCR.app 2>/dev/null || true
     cp -R "$MNT/MCR.app" /Applications/ || { hdiutil detach -quiet "$MNT"; fail "copy to /Applications failed (try sudo)"; }
@@ -151,7 +153,19 @@ case "$os_raw" in
     xattr -dr com.apple.quarantine /Applications/MCR.app 2>/dev/null || true
     log "installed: /Applications/MCR.app"
     log "first launch: right-click → Open (unsigned build)"
-    install_mergetool "/Applications/MCR.app/Contents/MacOS/MCR"
+    # The bundle's executable is named after the Cargo binary (mcr-app), not the
+    # product name.
+    install_mergetool "/Applications/MCR.app/Contents/MacOS/mcr-app"
+    # `mcr` CLI shim: `mcr diff <refA> <refB>` etc. exec preserves the CWD, which
+    # compare mode uses to find the repository.
+    mkdir -p "$PREFIX/bin"
+    cat > "$PREFIX/bin/mcr.new" <<'MCRCLI'
+#!/bin/sh
+exec "/Applications/MCR.app/Contents/MacOS/mcr-app" "$@"
+MCRCLI
+    chmod +x "$PREFIX/bin/mcr.new"
+    mv -f "$PREFIX/bin/mcr.new" "$PREFIX/bin/mcr"
+    log "cli: $PREFIX/bin/mcr (mcr diff <refA> <refB> to compare)"
     ;;
   Linux)
     case "$arch_raw" in x86_64|amd64) : ;; *) fail "Linux build is x86_64 only; got $arch_raw" ;; esac
@@ -167,12 +181,18 @@ case "$os_raw" in
     chmod +x "$APP.new"
     mv -f "$APP.new" "$APP"
 
-    # Wrapper: resolve a relative path arg to absolute before detaching (the
-    # AppImage chdir's into its mount, so a relative arg would resolve against
-    # /tmp/.mount_* instead of the shell cwd). No arg → open with no project.
+    # Wrapper. `mcr diff <refA> <refB>` runs in the FOREGROUND (like git difftool)
+    # and passes the caller's cwd as the repo anchor — the AppImage chdir's into
+    # its /tmp/.mount_* mount, so cwd-based repo discovery would misresolve.
+    # Other launches detach, resolving a relative path arg to absolute first.
     cat > "$BIN.new" <<WRAP
 #!/bin/sh
 app="$APP"
+if [ "\${1:-}" = "diff" ]; then
+  # Append the cwd anchor only when the caller didn't pass a dir themselves.
+  if [ "\$#" -eq 3 ]; then exec "\$app" "\$@" "\$(pwd)"; fi
+  exec "\$app" "\$@"
+fi
 if [ "\$#" -eq 0 ]; then
   nohup "\$app" >/dev/null 2>&1 &
 else

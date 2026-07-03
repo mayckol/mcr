@@ -21,22 +21,53 @@ export class ExitConfirmModal {
   }
 
   open(unresolved: string[], onConfirm: () => void) {
-    this.onConfirm = onConfirm;
     const items = unresolved.map((p) => `<li>${escapeHtml(p)}</li>`).join("");
-    this.overlay.innerHTML = `
-      <div class="mcr-modal" role="dialog" aria-label="Unresolved files">
-        <header class="mcr-modal-head">
-          <strong>${unresolved.length} file(s) still unresolved</strong>
-          <button class="mcr-modal-close" title="Close">×</button>
-        </header>
-        <div class="mcr-confirm-body">
+    this.render({
+      title: `${unresolved.length} file(s) still unresolved`,
+      bodyHtml: `
           <p>These files still have conflicts. Resolved files are already saved and
              will be kept; the rest stay conflicted for a later run.</p>
-          <ul class="mcr-confirm-list">${items}</ul>
-        </div>
+          <ul class="mcr-confirm-list">${items}</ul>`,
+      cancelLabel: "Keep resolving",
+      okLabel: "Exit anyway",
+      onConfirm,
+    });
+  }
+
+  confirm(opts: {
+    title: string;
+    body: string;
+    okLabel: string;
+    cancelLabel?: string;
+    onConfirm: () => void;
+  }) {
+    this.render({
+      title: opts.title,
+      bodyHtml: `<p>${escapeHtml(opts.body)}</p>`,
+      cancelLabel: opts.cancelLabel ?? "Keep resolving",
+      okLabel: opts.okLabel,
+      onConfirm: opts.onConfirm,
+    });
+  }
+
+  private render(opts: {
+    title: string;
+    bodyHtml: string;
+    cancelLabel: string;
+    okLabel: string;
+    onConfirm: () => void;
+  }) {
+    this.onConfirm = opts.onConfirm;
+    this.overlay.innerHTML = `
+      <div class="mcr-modal" role="dialog" aria-label="${escapeHtml(opts.title)}">
+        <header class="mcr-modal-head">
+          <strong>${escapeHtml(opts.title)}</strong>
+          <button class="mcr-modal-close" title="Close">×</button>
+        </header>
+        <div class="mcr-confirm-body">${opts.bodyHtml}</div>
         <footer class="mcr-modal-foot">
-          <button class="mcr-confirm-cancel">Keep resolving</button>
-          <button class="mcr-confirm-ok">Exit anyway</button>
+          <button class="mcr-confirm-cancel">${escapeHtml(opts.cancelLabel)}</button>
+          <button class="mcr-confirm-ok">${escapeHtml(opts.okLabel)}</button>
         </footer>
       </div>`;
 

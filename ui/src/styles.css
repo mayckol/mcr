@@ -1,3 +1,6 @@
+/* Design tokens. These are the Tokyo Night fallbacks painted before JS runs;
+   theme/manager.ts overwrites every var when a theme applies, so all chrome,
+   bands, connectors, and badges retint from this single set. */
 :root {
   --bg: #1a1b26;
   --bg-soft: #16161e;
@@ -6,21 +9,49 @@
   --fg-dim: #565f89;
   --border: #3b4261;
   --accent: #7aa2f7;
-  --cyan: #7dcfff;
+  --on-accent: #0d1117;
 
-  /* Scrollbar — a crafted Tokyo Night element instead of the OS default. */
-  --scroll-size: 12px;
+  --ok: #9ece6a;
+  --warn: #ffc777;
+  --danger: #f7768e;
+  --info: #7dcfff;
+  --special: #bb9af7;
+
+  /* Shape + depth scale — one radius family so the chrome reads as one system.
+     Panes stay tighter: a big radius notches the change bands on lines that sit
+     flush with a pane corner. */
+  --radius: 10px;
+  --radius-sm: 7px;
+  --radius-pane: 6px;
+
+  /* Behind the brand mark: transparent on dark themes; a dark chip on light ones
+     (the logo artwork is drawn for dark backgrounds). Set by theme/manager.ts. */
+  --brand-chip: transparent;
+  --pane-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --border-soft: color-mix(in srgb, var(--border) 55%, transparent);
+
+  /* Scrollbar — a crafted element instead of the OS default. */
+  --scroll-size: 9px;
   --scroll-thumb: #2c3252;
   --scroll-thumb-hover: #3d4673;
   --scroll-thumb-active: var(--accent);
   --scroll-track: transparent;
 
-  /* Change-band tints. Fallbacks here; main.ts overwrites them from
-     CATEGORY_COLORS so the gutter and the content band share one source. */
-  --band-added: rgba(158, 206, 106, 0.18);
+  /* Change tints. Bands fill whole lines and connector ribbons; words mark the
+     intra-line diff. Decorations reference these vars directly. */
+  --band-added: rgba(125, 207, 255, 0.15);
   --band-removed: rgba(247, 118, 142, 0.18);
-  --band-modified: rgba(158, 206, 106, 0.18);
-  --band-conflicting: rgba(224, 175, 104, 0.18);
+  --band-modified: rgba(125, 207, 255, 0.15);
+  --band-conflicting: rgba(255, 199, 119, 0.16);
+  --word-added: rgba(125, 207, 255, 0.32);
+  --word-removed: rgba(247, 118, 142, 0.36);
+  --word-modified: rgba(125, 207, 255, 0.32);
+  --word-conflicting: rgba(255, 199, 119, 0.34);
+  --conn-added: #7dcfff;
+  --conn-removed: #f7768e;
+  --conn-modified: #7dcfff;
+  --conn-conflicting: #ffc777;
 }
 
 * { box-sizing: border-box; }
@@ -53,60 +84,112 @@ html, body {
 
 body { display: flex; flex-direction: column; }
 
+button { font: inherit; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ── Toolbar ──────────────────────────────────────────────────────────── */
+
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
+  gap: 10px;
+  padding: 7px 12px;
   background: var(--bg-soft);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-soft);
 }
 
-.toolbar .brand { font-weight: 700; letter-spacing: 1px; margin-right: 8px; }
-.toolbar .brand-logo { height: 22px; width: auto; margin-right: 8px; display: block; }
-.toolbar .sep { width: 1px; height: 18px; background: var(--border); margin: 0 6px; }
-.toolbar .status { margin-left: auto; opacity: 0.8; }
+.toolbar .brand-logo {
+  height: 26px;
+  width: auto;
+  margin-right: 4px;
+  display: block;
+  background: var(--brand-chip);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+}
+.toolbar .status { margin-left: auto; color: var(--fg-dim); }
 .toolbar .merge-actions { display: flex; gap: 6px; margin-left: 8px; }
-.toolbar button.primary { background: var(--accent); color: #0d1117; border-color: var(--accent); font-weight: 600; }
-.toolbar button.primary:hover { filter: brightness(1.1); }
 
-.toolbar button, .toolbar select {
-  background: var(--bg-elev);
+/* Segmented clusters: related actions share one bordered pill, separated by
+   hairlines — the grouping carries the meaning, not extra chrome. */
+.tool-group {
+  display: inline-flex;
+  align-items: stretch;
+  height: 26px;
+  background: color-mix(in srgb, var(--bg-elev) 55%, transparent);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.tool-group button {
+  min-width: 28px;
+  padding: 0 9px;
+  background: transparent;
   color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 3px 8px;
+  border: none;
+  border-right: 1px solid var(--border-soft);
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.tool-group button:last-child { border-right: none; }
+.tool-group button:hover { background: var(--accent-soft); color: var(--accent); }
+
+.tool-label { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-dim); }
+.toolbar select {
+  height: 26px;
+  background: color-mix(in srgb, var(--bg-elev) 55%, transparent);
+  color: var(--fg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 0 6px;
   cursor: pointer;
 }
-.toolbar button:hover { border-color: var(--accent); }
+.toolbar select:hover { border-color: var(--accent); }
 
-/* Bottom action bar — accept-per-side on the left, finish/cancel on the right. */
+.toolbar .merge-actions button {
+  height: 26px;
+  background: color-mix(in srgb, var(--bg-elev) 55%, transparent);
+  color: var(--fg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 0 10px;
+  cursor: pointer;
+}
+.toolbar .merge-actions button:hover { background: var(--accent-soft); color: var(--accent); }
+
+/* ── Footer action bar ────────────────────────────────────────────────── */
+
 .footbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 9px 14px;
   background: var(--bg-soft);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-soft);
 }
 .footbar .foot-group { display: flex; gap: 8px; }
 .footbar button {
-  background: var(--bg-elev);
+  height: 28px;
+  background: color-mix(in srgb, var(--bg-elev) 55%, transparent);
   color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 5px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 0 16px;
   cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
-.footbar button:hover { border-color: var(--accent); }
+.footbar button:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .footbar button.primary {
   background: var(--accent);
-  color: #0d1117;
+  color: var(--on-accent);
   border-color: var(--accent);
   font-weight: 600;
 }
-.footbar button.primary:hover { filter: brightness(1.1); }
+.footbar button.primary:hover { filter: brightness(1.08); color: var(--on-accent); }
+
+/* ── Three-pane editor ────────────────────────────────────────────────── */
 
 .merge {
   position: relative;
@@ -116,32 +199,52 @@ body { display: flex; flex-direction: column; }
      so long code lines scroll *inside* a pane instead of blowing the three
      columns past the viewport and forcing a window-level horizontal scroll. */
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 28px;
+  gap: 18px;
   min-height: 0;
   padding: 0 14px 14px;
 }
 
 .col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.col-title { padding: 6px 4px; opacity: 0.7; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+.col-title {
+  padding: 7px 6px 5px;
+  color: var(--fg-dim);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .pane {
   flex: 1;
   min-height: 0;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pane);
   overflow: hidden;
   background: var(--bg);
+  box-shadow: var(--pane-shadow);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
+/* Focus is a whisper, not a frame: the border warms toward the accent instead
+   of drawing a bright rectangle around the code. */
 .pane:focus-within {
-  border-color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 
 .cm-editor { height: 100%; }
 .cm-gutters { background: transparent; border: none; }
-.cm-lineNumbers .cm-gutterElement { color: rgba(201, 209, 217, 0.4); }
 
-.mcr-filler { background: repeating-linear-gradient(45deg, transparent, transparent 6px, rgba(255,255,255,0.03) 6px, rgba(255,255,255,0.03) 12px); }
+.mcr-filler { background: repeating-linear-gradient(45deg, transparent, transparent 6px, color-mix(in srgb, var(--fg) 3%, transparent) 6px, color-mix(in srgb, var(--fg) 3%, transparent) 12px); }
 .mcr-band { border-radius: 0; }
+/* The scroller reserves a scrollbar rail (scrollbar-gutter: stable), which line
+   backgrounds can't reach — the band looked chopped short of the pane edge. An
+   offset solid shadow paints the same tint across the rail without touching
+   layout or CodeMirror's width measuring. */
+.mcr-band.mcr-added { box-shadow: var(--scroll-size) 0 0 var(--band-added); }
+.mcr-band.mcr-removed { box-shadow: var(--scroll-size) 0 0 var(--band-removed); }
+.mcr-band.mcr-modified { box-shadow: var(--scroll-size) 0 0 var(--band-modified); }
+.mcr-band.mcr-conflicting { box-shadow: var(--scroll-size) 0 0 var(--band-conflicting); }
 .mcr-resolved { opacity: 0.7; }
 .mcr-word { border-radius: 2px; }
 
@@ -162,14 +265,15 @@ body { display: flex; flex-direction: column; }
   padding: 0 2px;
   border: none;
   background: transparent;
-  color: var(--cyan);
+  color: var(--info);
   cursor: pointer;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
-  transition: color 0.12s ease;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  transition: color 0.12s ease, transform 0.12s ease;
 }
-.mcr-gizmo:hover { color: #b4f9ff; }
+.mcr-gizmo:hover { color: color-mix(in srgb, var(--info) 60%, var(--fg)); transform: scale(1.15); }
 
-/* Shortcuts modal */
+/* ── Modal shell (shortcuts, settings, exit confirm) ──────────────────── */
+
 .mcr-modal-overlay {
   position: fixed;
   inset: 0;
@@ -183,10 +287,10 @@ body { display: flex; flex-direction: column; }
   width: 460px;
   max-width: 90vw;
   background: var(--bg-soft);
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
   overflow: hidden;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
 }
 .mcr-modal-head, .mcr-modal-foot {
   display: flex;
@@ -195,8 +299,8 @@ body { display: flex; flex-direction: column; }
   padding: 10px 14px;
   background: var(--bg);
 }
-.mcr-modal-head { border-bottom: 1px solid var(--border); }
-.mcr-modal-foot { border-top: 1px solid var(--border); }
+.mcr-modal-head { border-bottom: 1px solid var(--border-soft); }
+.mcr-modal-foot { border-top: 1px solid var(--border-soft); }
 .mcr-modal-close {
   background: transparent;
   border: none;
@@ -205,6 +309,8 @@ body { display: flex; flex-direction: column; }
   cursor: pointer;
 }
 .mcr-modal-close:hover { color: var(--accent); }
+
+/* Shortcuts list */
 .mcr-kb-list { padding: 6px 0; max-height: 60vh; overflow: auto; }
 .mcr-kb-row {
   display: flex;
@@ -219,26 +325,78 @@ body { display: flex; flex-direction: column; }
   font-family: ui-monospace, monospace;
   background: var(--bg-elev);
   color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
   padding: 3px 10px;
   cursor: pointer;
 }
 .mcr-kb-chord:hover { border-color: var(--accent); }
 .mcr-kb-capturing { border-color: var(--accent); color: var(--accent); }
-.mcr-kb-conflict { border-color: #f7768e; color: #f7768e; }
+.mcr-kb-conflict { border-color: var(--danger); color: var(--danger); }
 .mcr-kb-hint { color: var(--fg-dim); font-size: 12px; }
 .mcr-kb-reset {
   background: var(--bg-elev);
   color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
   padding: 3px 10px;
   cursor: pointer;
 }
 .mcr-kb-reset:hover { border-color: var(--accent); }
 
-/* Multi-file: work row = file-list sidebar + the three-pane editor. */
+/* ── Settings ─────────────────────────────────────────────────────────── */
+
+.mcr-settings { width: 520px; }
+.mcr-settings-body { padding: 14px; }
+.mcr-settings-section {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.4px;
+  color: var(--fg-dim);
+}
+.mcr-settings-hint { margin: 4px 0 12px; color: var(--fg-dim); font-size: 12px; }
+
+.th-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.th-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  cursor: pointer;
+  text-align: left;
+  color: var(--fg);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.th-card:hover { border-color: var(--accent); }
+.th-card.active { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.th-name { font-size: 12px; font-weight: 600; }
+.th-card.active .th-name::after { content: " ✓"; color: var(--accent); }
+
+/* The preview is the app in miniature: three panes, three diff-tinted lines. */
+.th-preview {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid;
+  border-radius: var(--radius-sm);
+}
+.th-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px 4px;
+  border-radius: 4px;
+  min-height: 38px;
+}
+.th-line { display: block; height: 4px; border-radius: 2px; }
+
+/* ── File list sidebar ────────────────────────────────────────────────── */
+
 .work { flex: 1; display: flex; min-height: 0; min-width: 0; }
 
 .file-list {
@@ -248,28 +406,30 @@ body { display: flex; flex-direction: column; }
   display: flex;
   flex-direction: column;
   background: var(--bg-soft);
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--border-soft);
   overflow: hidden;
 }
 .file-list-head {
   padding: 8px 12px;
-  font-size: 11px;
+  font-size: 10px;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 1.4px;
   color: var(--fg-dim);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-soft);
 }
-.file-rows { flex: 1; overflow: auto; min-height: 0; }
+.file-rows { flex: 1; overflow: auto; min-height: 0; padding: 4px; }
 .file-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
+  padding: 6px 8px;
   cursor: pointer;
   border-left: 2px solid transparent;
+  border-radius: var(--radius-sm);
 }
 .file-row:hover { background: var(--bg-elev); }
-.file-row.active { background: var(--bg-elev); border-left-color: var(--accent); }
+.file-row.active { background: var(--accent-soft); border-left-color: var(--accent); }
 .file-row.is-resolved .file-path { opacity: 0.6; }
 .file-path {
   flex: 1;
@@ -281,11 +441,24 @@ body { display: flex; flex-direction: column; }
   text-align: left;
 }
 .file-status { width: 8px; height: 8px; border-radius: 999px; flex: 0 0 8px; }
-.file-status-resolved { background: #9ece6a; }
-.file-status-text { background: #e0af68; }
+.file-status-resolved { background: var(--ok); }
+.file-status-text { background: var(--warn); }
 .file-status-binary,
 .file-status-delete-modify,
-.file-status-both-added { background: #f7768e; }
+.file-status-both-added { background: var(--danger); }
+.file-change {
+  width: 14px;
+  flex: 0 0 14px;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+}
+.file-change-A { color: var(--ok); }
+.file-change-M { color: var(--warn); }
+.file-change-D { color: var(--danger); }
+.file-change-R,
+.file-change-C { color: var(--special); }
+.file-change-T { color: var(--info); }
 .file-accept { display: none; gap: 4px; }
 .file-row:hover .file-accept { display: flex; }
 .file-accept button {
@@ -295,30 +468,36 @@ body { display: flex; flex-direction: column; }
   padding: 0 6px;
   background: var(--bg-elev);
   color: var(--fg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   border-radius: 4px;
   cursor: pointer;
 }
 .file-accept button:hover { border-color: var(--accent); color: var(--accent); }
 
-/* Exit-confirmation modal body + buttons (reuses .mcr-modal shell). */
+/* ── Exit-confirmation modal body + buttons (reuses .mcr-modal shell) ──── */
+
 .mcr-confirm-body { padding: 12px 14px; max-height: 50vh; overflow: auto; }
 .mcr-confirm-body p { margin: 0 0 8px; color: var(--fg-dim); }
 .mcr-confirm-list { margin: 0; padding-left: 18px; font-family: ui-monospace, monospace; }
 .mcr-confirm-list li { padding: 2px 0; }
 .mcr-confirm-cancel, .mcr-confirm-ok {
+  height: 26px;
   background: var(--bg-elev);
   color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 4px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 0 12px;
   cursor: pointer;
 }
 .mcr-confirm-cancel:hover { border-color: var(--accent); }
 .mcr-confirm-ok {
   background: var(--accent);
-  color: #0d1117;
+  color: var(--on-accent);
   border-color: var(--accent);
   font-weight: 600;
 }
-.mcr-confirm-ok:hover { filter: brightness(1.1); }
+.mcr-confirm-ok:hover { filter: brightness(1.08); }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}

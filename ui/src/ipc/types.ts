@@ -70,6 +70,8 @@ export interface SessionSummary {
   kind: ConflictKind;
   resolved: boolean;
   remaining_conflicts: number;
+  /** Compare mode only: git name-status letter (A/M/D/R/...) between the refs. */
+  change_status?: string | null;
 }
 
 export interface SessionProgress {

@@ -21,9 +21,24 @@ export class FileList {
   ) {}
 
   render(files: SessionSummary[], activeId: string | null, progress: SessionProgress) {
-    const head = `<div class="file-list-head">${progress.resolved_count} of ${progress.total} resolved</div>`;
+    // Compare rows (change_status set) are read-only: a name-status badge instead
+    // of the resolve dot, and no whole-file accept actions.
+    const compare = files.length > 0 && files.every((f) => f.change_status);
+    const head = compare
+      ? `<div class="file-list-head">${progress.total} file(s) changed</div>`
+      : `<div class="file-list-head">${progress.resolved_count} of ${progress.total} resolved</div>`;
     const rows = files
       .map((f) => {
+        if (f.change_status) {
+          const letter = escapeHtml(f.change_status);
+          const rowCls = "file-row" + (f.session_id === activeId ? " active" : "");
+          return (
+            `<div class="${rowCls}" data-id="${f.session_id}">` +
+            `<span class="file-change file-change-${letter}" title="${letter}">${letter}</span>` +
+            `<span class="file-path" title="${escapeHtml(f.path_label)}">${escapeHtml(f.path_label)}</span>` +
+            `</div>`
+          );
+        }
         const state = f.resolved ? "resolved" : f.kind === "text" ? "unresolved" : f.kind;
         const rowCls =
           "file-row" +
