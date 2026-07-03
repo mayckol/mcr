@@ -64,6 +64,12 @@
 ::-webkit-scrollbar { width: var(--scroll-size); height: var(--scroll-size); }
 ::-webkit-scrollbar-track { background: var(--scroll-track); }
 ::-webkit-scrollbar-corner { background: var(--scroll-track); }
+/* Editor panes keep a transparent track so a changed line's band (painted across
+   the reserved scrollbar-gutter rail by the .mcr-band box-shadow) reaches the pane
+   edge instead of being cut short by the opaque track. */
+.cm-scroller { scrollbar-color: var(--scroll-thumb) transparent; }
+.cm-scroller::-webkit-scrollbar-track,
+.cm-scroller::-webkit-scrollbar-corner { background: transparent; }
 ::-webkit-scrollbar-thumb {
   background: var(--scroll-thumb);
   border: 3px solid transparent;
