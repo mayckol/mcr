@@ -1,5 +1,11 @@
 import { THEMES, type ThemeId, type ThemePalette } from "../theme/themes";
 import { storedThemeId } from "../theme/manager";
+import {
+  FONT_FAMILIES,
+  FONT_WEIGHTS,
+  storedFont,
+  type FontSettings,
+} from "../theme/font";
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) =>
@@ -22,11 +28,23 @@ function preview(p: ThemePalette): string {
   );
 }
 
-/** Settings modal. One section for now — Appearance — themed live on click. */
+function options(items: { id: string; label: string }[], selected: string): string {
+  return items
+    .map(
+      (o) =>
+        `<option value="${o.id}"${o.id === selected ? " selected" : ""}>${escapeHtml(o.label)}</option>`
+    )
+    .join("");
+}
+
+/** Settings modal: Appearance (theme) and Editor font — both applied live. */
 export class SettingsPanel {
   private overlay: HTMLElement;
 
-  constructor(private onTheme: (id: ThemeId) => void) {
+  constructor(
+    private onTheme: (id: ThemeId) => void,
+    private onFont: (settings: FontSettings) => void
+  ) {
     this.overlay = document.createElement("div");
     this.overlay.className = "mcr-modal-overlay";
     this.overlay.style.display = "none";
@@ -55,6 +73,8 @@ export class SettingsPanel {
         `</button>`
     ).join("");
 
+    const font = storedFont();
+
     this.overlay.innerHTML = `
       <div class="mcr-modal mcr-settings" role="dialog" aria-label="Settings">
         <header class="mcr-modal-head">
@@ -65,6 +85,31 @@ export class SettingsPanel {
           <div class="mcr-settings-section">Appearance</div>
           <p class="mcr-settings-hint">Theme applies immediately and is remembered.</p>
           <div class="th-grid">${cards}</div>
+
+          <div class="mcr-settings-section">Editor</div>
+          <div class="mcr-field">
+            <div class="mcr-field-text">
+              <span class="mcr-field-name">Editor font</span>
+              <span class="mcr-field-hint">Font family for the file viewer and diff. Falls
+                back to the system monospace.</span>
+            </div>
+            <select class="mcr-input" data-font="family">${options(FONT_FAMILIES, font.family)}</select>
+          </div>
+          <div class="mcr-field">
+            <div class="mcr-field-text">
+              <span class="mcr-field-name">Editor weight</span>
+              <span class="mcr-field-hint">Thickness of code in the file viewer and diff.</span>
+            </div>
+            <select class="mcr-input" data-font="weight">${options(FONT_WEIGHTS, font.weight)}</select>
+          </div>
+          <div class="mcr-field">
+            <div class="mcr-field-text">
+              <span class="mcr-field-name">Editor font size</span>
+              <span class="mcr-field-hint">In pixels.</span>
+            </div>
+            <input class="mcr-input mcr-input-num" type="number" min="8" max="32" step="1"
+              data-font="size" value="${font.size}" />
+          </div>
         </div>
       </div>`;
 
@@ -74,6 +119,21 @@ export class SettingsPanel {
         this.onTheme(card.dataset.theme as ThemeId);
         this.renderInto(); // re-render so the active outline follows the pick
       });
+    });
+    this.overlay
+      .querySelectorAll<HTMLSelectElement | HTMLInputElement>("[data-font]")
+      .forEach((el) => {
+        el.addEventListener("change", () => this.emitFont());
+      });
+  }
+
+  private emitFont() {
+    const read = (key: string) =>
+      this.overlay.querySelector<HTMLSelectElement | HTMLInputElement>(`[data-font="${key}"]`)!.value;
+    this.onFont({
+      family: read("family"),
+      weight: read("weight"),
+      size: Number(read("size")),
     });
   }
 }

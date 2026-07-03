@@ -10,6 +10,7 @@ import { FileList } from "./files/list";
 import { ExitConfirmModal } from "./confirm/modal";
 import { SettingsPanel } from "./settings/panel";
 import { applyTheme, storedThemeId } from "./theme/manager";
+import { applyFont } from "./theme/font";
 import { listen } from "@tauri-apps/api/event";
 import type { SessionModel, SessionSummary, SessionProgress, Side } from "./ipc/types";
 
@@ -211,7 +212,10 @@ $("shortcuts").addEventListener("click", () => shortcutsPanel.open());
 
 // Settings (Appearance). Opened from the gear, Cmd/Ctrl+,, or the native
 // macOS app-menu "Settings…" item (which emits mcr://open-settings).
-const settingsPanel = new SettingsPanel((id) => applyTheme(id, (p) => merge.setTheme(p)));
+const settingsPanel = new SettingsPanel(
+  (id) => applyTheme(id, (p) => merge.setTheme(p)),
+  (settings) => merge.setFont(applyFont(settings))
+);
 $("settings").addEventListener("click", () => settingsPanel.open());
 window.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === ",") {

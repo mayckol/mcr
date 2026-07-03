@@ -10,14 +10,7 @@ function chrome(p: ThemePalette): Extension {
   return EditorView.theme(
     {
       "&": { color: p.fg, backgroundColor: "transparent", height: "100%" },
-      ".cm-scroller": {
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-        fontSize: "13px",
-        lineHeight: "20px",
-      },
-      // Fixed, integer line height so every row is identical across panes — banded
-      // and plain lines must match exactly or the three panes drift out of alignment.
-      ".cm-line": { lineHeight: "20px", padding: "0 4px" },
+      ".cm-line": { padding: "0 4px" },
       ".cm-content": { caretColor: p.fg },
       ".cm-cursor, .cm-dropCursor": { borderLeftColor: p.fg },
       "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
@@ -28,7 +21,6 @@ function chrome(p: ThemePalette): Extension {
         color: p.gutter,
         border: "none",
       },
-      ".cm-gutterElement": { lineHeight: "20px" },
       ".cm-lineNumbers .cm-gutterElement": { color: p.gutter, padding: "0 8px 0 12px" },
       ".cm-activeLineGutter": { backgroundColor: "transparent" },
       ".cm-activeLine": { backgroundColor: "transparent" },

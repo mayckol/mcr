@@ -7,6 +7,7 @@ import { editorTheme } from "../theme/editor";
 import { themeById } from "../theme/themes";
 import { storedThemeId } from "../theme/manager";
 import type { ThemePalette } from "../theme/themes";
+import { fontExtension, storedFont, type FontSettings } from "../theme/font";
 import { syntaxFor } from "../highlight/syntax";
 
 export interface MergeRoots {
@@ -27,7 +28,8 @@ function makeView(
   editable: boolean,
   cb: MergeCallbacks,
   langGuard: Compartment,
-  themeGuard: Compartment
+  themeGuard: Compartment,
+  fontGuard: Compartment
 ): EditorView {
   const editGuard = new Compartment();
   const view = new EditorView({
@@ -36,6 +38,7 @@ function makeView(
       doc: "",
       extensions: [
         themeGuard.of(editorTheme(themeById(storedThemeId()))),
+        fontGuard.of(fontExtension(storedFont())),
         langGuard.of(syntaxFor(null)),
         lineNumbers(),
         hunkDecorations(pane),
@@ -57,7 +60,6 @@ function makeView(
           ".cm-scroller": {
             overflow: "auto",
             scrollbarGutter: "stable",
-            fontFamily: "ui-monospace, monospace",
           },
         }),
       ],
@@ -74,11 +76,12 @@ export class MergeEditor {
 
   private readonly langGuard = new Compartment();
   private readonly themeGuard = new Compartment();
+  private readonly fontGuard = new Compartment();
 
   constructor(roots: MergeRoots, cb: MergeCallbacks) {
-    this.local = makeView(roots.local, "local", false, cb, this.langGuard, this.themeGuard);
-    this.result = makeView(roots.result, "result", true, cb, this.langGuard, this.themeGuard);
-    this.incoming = makeView(roots.incoming, "incoming", false, cb, this.langGuard, this.themeGuard);
+    this.local = makeView(roots.local, "local", false, cb, this.langGuard, this.themeGuard, this.fontGuard);
+    this.result = makeView(roots.result, "result", true, cb, this.langGuard, this.themeGuard, this.fontGuard);
+    this.incoming = makeView(roots.incoming, "incoming", false, cb, this.langGuard, this.themeGuard, this.fontGuard);
   }
 
   views(): EditorView[] {
@@ -98,6 +101,14 @@ export class MergeEditor {
     const ext = editorTheme(palette);
     for (const view of this.views()) {
       view.dispatch({ effects: this.themeGuard.reconfigure(ext) });
+    }
+  }
+
+  /** Reapply font family, weight, and size to all three panes. */
+  setFont(settings: FontSettings) {
+    const ext = fontExtension(settings);
+    for (const view of this.views()) {
+      view.dispatch({ effects: this.fontGuard.reconfigure(ext) });
     }
   }
 

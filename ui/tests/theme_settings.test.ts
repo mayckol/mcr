@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { applyTheme, storedThemeId } from "../src/theme/manager";
 import { THEMES, TOKYO_NIGHT, DAYLIGHT } from "../src/theme/themes";
 import { SettingsPanel } from "../src/settings/panel";
+import { applyFont, storedFont, DEFAULT_FONT } from "../src/theme/font";
 
 // This jsdom/vitest combo ships no localStorage — back it with a Map.
 const store = new Map<string, string>();
@@ -49,7 +50,7 @@ describe("theme manager", () => {
 describe("SettingsPanel (Appearance)", () => {
   it("lists every theme with the active one marked", () => {
     applyTheme("tokyo-storm");
-    const panel = new SettingsPanel(() => {});
+    const panel = new SettingsPanel(() => {}, () => {});
     panel.open();
     const cards = document.querySelectorAll(".th-card");
     expect(cards.length).toBe(THEMES.length);
@@ -59,7 +60,7 @@ describe("SettingsPanel (Appearance)", () => {
 
   it("clicking a card reports the theme id and moves the active mark", () => {
     const onTheme = vi.fn((id) => applyTheme(id));
-    const panel = new SettingsPanel(onTheme);
+    const panel = new SettingsPanel(onTheme, () => {});
     panel.open();
     (document.querySelector('.th-card[data-theme="ember"]') as HTMLElement).click();
     expect(onTheme).toHaveBeenCalledWith("ember");
@@ -67,9 +68,41 @@ describe("SettingsPanel (Appearance)", () => {
   });
 
   it("close hides the overlay", () => {
-    const panel = new SettingsPanel(() => {});
+    const panel = new SettingsPanel(() => {}, () => {});
     panel.open();
     (document.querySelector(".mcr-settings .mcr-modal-close") as HTMLElement).click();
     expect((document.querySelector(".mcr-modal-overlay") as HTMLElement).style.display).toBe("none");
+  });
+});
+
+describe("font manager", () => {
+  it("defaults to SF Mono, Regular, 13px", () => {
+    expect(storedFont()).toEqual(DEFAULT_FONT);
+  });
+
+  it("applyFont normalizes, clamps size, and persists", () => {
+    const saved = applyFont({ family: "fira-code", weight: "bold", size: 99 });
+    expect(saved).toEqual({ family: "fira-code", weight: "bold", size: 32 });
+    expect(storedFont()).toEqual({ family: "fira-code", weight: "bold", size: 32 });
+  });
+
+  it("unknown stored values fall back to defaults", () => {
+    localStorage.setItem("mcr.font", JSON.stringify({ family: "nope", weight: "nope", size: 3 }));
+    const f = storedFont();
+    expect(f.family).toBe(DEFAULT_FONT.family);
+    expect(f.weight).toBe(DEFAULT_FONT.weight);
+    expect(f.size).toBe(8);
+  });
+});
+
+describe("SettingsPanel (Editor font)", () => {
+  it("reports the chosen font on change", () => {
+    const onFont = vi.fn();
+    const panel = new SettingsPanel(() => {}, onFont);
+    panel.open();
+    const family = document.querySelector('[data-font="family"]') as HTMLSelectElement;
+    family.value = "menlo";
+    family.dispatchEvent(new Event("change"));
+    expect(onFont).toHaveBeenCalledWith({ family: "menlo", weight: "regular", size: 13 });
   });
 });
