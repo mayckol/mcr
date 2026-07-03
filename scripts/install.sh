@@ -165,7 +165,7 @@ exec "/Applications/MCR.app/Contents/MacOS/mcr-app" "$@"
 MCRCLI
     chmod +x "$PREFIX/bin/mcr.new"
     mv -f "$PREFIX/bin/mcr.new" "$PREFIX/bin/mcr"
-    log "cli: $PREFIX/bin/mcr (mcr diff <refA> <refB> to compare)"
+    log "cli: $PREFIX/bin/mcr (mcr diff <branch|commit> to compare)"
     ;;
   Linux)
     case "$arch_raw" in x86_64|amd64) : ;; *) fail "Linux build is x86_64 only; got $arch_raw" ;; esac
