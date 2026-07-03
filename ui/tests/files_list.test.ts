@@ -101,3 +101,45 @@ describe("FileList (compare mode)", () => {
     expect(onSelect).toHaveBeenCalledWith("session-3");
   });
 });
+
+describe("FileList (folder tree)", () => {
+  const nested: SessionSummary[] = [
+    { session_id: "s1", path_label: "internal/entity/interface.go", kind: "text", resolved: false, remaining_conflicts: 1 },
+    { session_id: "s2", path_label: "internal/entity/detail.go", kind: "text", resolved: false, remaining_conflicts: 1 },
+    { session_id: "s3", path_label: "internal/web/routes.go", kind: "text", resolved: false, remaining_conflicts: 0 },
+    { session_id: "s4", path_label: "root.txt", kind: "text", resolved: false, remaining_conflicts: 0 },
+  ];
+
+  it("groups files under collapsible folders with counts", () => {
+    const { root, list } = mount();
+    list.render(nested, null, progress);
+    const dirs = [...root.querySelectorAll(".tree-dir .tree-name")].map((d) => d.textContent);
+    expect(dirs).toEqual(["internal", "entity", "web"]);
+    const counts = [...root.querySelectorAll(".tree-dir .tree-count")].map((c) => c.textContent);
+    expect(counts).toEqual(["3", "2", "1"]);
+    // File rows show basenames; full path stays in the tooltip.
+    const names = [...root.querySelectorAll(".file-row .file-path")].map((f) => f.textContent);
+    expect(names).toEqual(["interface.go", "detail.go", "routes.go", "root.txt"]);
+  });
+
+  it("compresses single-child directory chains", () => {
+    const { root, list } = mount();
+    list.render(
+      [{ session_id: "s1", path_label: "a/b/c/deep.ts", kind: "text", resolved: false, remaining_conflicts: 0 }],
+      null,
+      progress
+    );
+    const dirs = [...root.querySelectorAll(".tree-dir .tree-name")].map((d) => d.textContent);
+    expect(dirs).toEqual(["a/b/c"]);
+  });
+
+  it("clicking a folder collapses and re-expands its files", () => {
+    const { root, list } = mount();
+    list.render(nested, null, progress);
+    (root.querySelector('.tree-dir[data-path="internal/entity"]') as HTMLElement).click();
+    expect(root.querySelector('.file-row[data-id="s1"]')).toBeNull();
+    expect(root.querySelector('.file-row[data-id="s3"]')).not.toBeNull();
+    (root.querySelector('.tree-dir[data-path="internal/entity"]') as HTMLElement).click();
+    expect(root.querySelector('.file-row[data-id="s1"]')).not.toBeNull();
+  });
+});

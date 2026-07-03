@@ -87,26 +87,34 @@ function apply(next: SessionModel) {
   setTimeout(scheduleRefresh, 250);
 }
 
-// On first opening a file, jump the result pane to its earliest change and focus
-// the editor, so review starts at the first hunk instead of the top of the file.
-// Called only on fresh loads — never after a mutation, which would yank the view.
-function focusFirstChange() {
+// On opening a file, jump the result pane to its first (or, when arriving from
+// backwards navigation, last) change and focus the editor. Called only on fresh
+// loads — never after a mutation, which would yank the view.
+function focusEdgeChange(edge: "first" | "last") {
   if (!model || model.hunks.length === 0) return;
-  const first = model.hunks.reduce((a, b) =>
-    b.result_range.start < a.result_range.start ? b : a
+  const target = model.hunks.reduce((a, b) =>
+    (edge === "first"
+      ? b.result_range.start < a.result_range.start
+      : b.result_range.start > a.result_range.start)
+      ? b
+      : a
   );
-  currentHunk = first.id;
+  currentHunk = target.id;
   // Defer past the webview's font/layout measurement (same reason apply() re-runs
   // scheduleRefresh on a delay); scrolling before layout settles snaps to the top.
   const go = () => {
     if (!model) return;
     const doc = merge.result.state.doc;
-    const line = doc.line(Math.min(first.result_range.start + 1, doc.lines));
+    const line = doc.line(Math.min(target.result_range.start + 1, doc.lines));
     merge.result.focus();
     merge.result.dispatch({ selection: { anchor: line.from }, scrollIntoView: true });
   };
   requestAnimationFrame(go);
   setTimeout(go, 120);
+}
+
+function focusFirstChange() {
+  focusEdgeChange("first");
 }
 
 async function mutate(fn: (sessionId: string) => Promise<SessionModel>): Promise<SessionModel> {
@@ -225,7 +233,7 @@ function showFileList(on: boolean) {
 
 // Open a file from the list in the shared three-pane editor. Special (non-text)
 // conflicts are resolved only via accept, so they do not open the editor (FR-014).
-async function selectFile(id: string) {
+async function selectFile(id: string, edge: "first" | "last" = "first") {
   const summary = files.find((f) => f.session_id === id);
   activeFile = id;
   // Binary blobs cannot be shown as text — they stay accept-only. Text, both-added
@@ -244,7 +252,7 @@ async function selectFile(id: string) {
       const m = await ipc.selectSession(id);
       merge.setLanguage(basename(summary?.path_label));
       apply(m);
-      focusFirstChange();
+      focusEdgeChange(edge);
     } catch (e) {
       $("status").textContent = `Open failed: ${e}`;
     }
@@ -316,8 +324,35 @@ async function exitFlow(abort: boolean) {
   }
 }
 
+// Files reachable by change navigation (binary entries never open in the editor).
+function navigableFiles(): SessionSummary[] {
+  return files.filter((f) => f.kind !== "binary");
+}
+
+// Next/previous change. At a file's last change, "next" continues at the first
+// change of the next file in the list (wrapping); "prev" mirrors that backwards.
 async function navigate(direction: "next" | "prev") {
   if (!inTauri || !model) return;
+
+  const nav = navigableFiles();
+  if (nav.length > 1) {
+    const ordered = [...model.hunks].sort((a, b) => a.result_range.start - b.result_range.start);
+    const idx = ordered.findIndex((h) => h.id === currentHunk);
+    const atEnd = ordered.length === 0 || (idx >= 0 && direction === "next" && idx === ordered.length - 1);
+    const atStart = ordered.length === 0 || (idx >= 0 && direction === "prev" && idx === 0);
+    if ((direction === "next" && atEnd) || (direction === "prev" && atStart)) {
+      const found = nav.findIndex((f) => f.session_id === activeFile);
+      // Unknown active file: "next" starts at the first file, "prev" at the last.
+      const cur = found === -1 ? (direction === "next" ? nav.length - 1 : 0) : found;
+      const next =
+        direction === "next"
+          ? nav[(cur + 1) % nav.length]
+          : nav[(cur - 1 + nav.length) % nav.length];
+      await selectFile(next.session_id, direction === "next" ? "first" : "last");
+      return;
+    }
+  }
+
   const id = await ipc.navigate(model.session_id, direction, currentHunk);
   currentHunk = id;
   if (id === null) return;
