@@ -90,6 +90,13 @@ L="${1:-}"; B="${2:-}"; R="${3:-}"; M="${4:-}"
 [ -n "$B" ] && B="$(abspath "$B")"
 [ -n "$R" ] && R="$(abspath "$R")"
 [ -n "$M" ] && M="$(abspath "$M")"
+# The AppImage's default runtime needs libfuse2. Newer distros ship without it,
+# so the image can't mount and nothing opens — fall back to self-extraction when
+# libfuse2 is absent. (No-op on the macOS .app: ldconfig isn't present, so the
+# env var is set and simply ignored by the Mach-O binary.)
+if ! { command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q 'libfuse\.so\.2'; }; then
+  export APPIMAGE_EXTRACT_AND_RUN=1
+fi
 exec "@APP@" "$L" "$B" "$R" "$M"
 SHIM
   # Substitute the real binary path (heredoc is quoted to avoid escaping the shim's
@@ -102,6 +109,10 @@ SHIM
   if command -v git >/dev/null 2>&1; then
     git config --global mergetool.mcr.cmd "\"$shim\" \"\$LOCAL\" \"\$BASE\" \"\$REMOTE\" \"\$MERGED\"" || true
     git config --global mergetool.mcr.trustExitCode true || true
+    # Skip git's "Hit return to start…" / "Was the merge successful?" terminal
+    # prompts — MCR is a GUI and reports the outcome via its exit code, so the
+    # terminal Q&A is pure friction (it fires once per file in a merge or rebase).
+    git config --global mergetool.prompt false || true
     # Don't clobber an existing global merge.tool; only default it when unset.
     if [ -z "$(git config --global --get merge.tool 2>/dev/null || true)" ]; then
       git config --global merge.tool mcr || true
@@ -188,6 +199,11 @@ MCRCLI
     cat > "$BIN.new" <<WRAP
 #!/bin/sh
 app="$APP"
+# AppImage runtime needs libfuse2; on distros without it the image won't mount and
+# nothing launches — fall back to self-extraction when libfuse2 is missing.
+if ! { command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q 'libfuse\.so\.2'; }; then
+  export APPIMAGE_EXTRACT_AND_RUN=1
+fi
 if [ "\${1:-}" = "diff" ]; then
   # Append the cwd anchor only when the caller didn't pass a dir themselves.
   if [ "\$#" -eq 2 ]; then exec "\$app" "\$@" "\$(pwd)"; fi
@@ -219,7 +235,7 @@ WRAP
 Type=Application
 Name=MCR
 Comment=Three-pane visual git merge editor
-Exec="$APP"
+Exec="$BIN"
 Icon=mcr
 Terminal=false
 Categories=Development;Utility;
