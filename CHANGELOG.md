@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.3.5
+
+- **Change navigation skips resolved changes.** The next/previous arrows now stop
+  only on unresolved changes, jumping over the dotted ghosts of already-applied
+  ones. File-crossing and edge focus land on actionable changes too.
+- **Linux mergetool opens without libfuse2.** The AppImage now self-extracts when
+  libfuse2 is missing (common on newer distros), so `git mergetool` no longer
+  silently fails to open a window.
+- **No more terminal prompts on merge.** The installer sets
+  `mergetool.prompt=false`, so git skips its "Hit return…" / "Was the merge
+  successful?" questions — the MCR window opens straight away.
+
 ## v0.3.4
 
 - **Change bands reach the pane edge.** Each pane's vertical scrollbar now sits on
