@@ -93,7 +93,11 @@ function apply(next: SessionModel) {
 // loads — never after a mutation, which would yank the view.
 function focusEdgeChange(edge: "first" | "last") {
   if (!model || model.hunks.length === 0) return;
-  const target = model.hunks.reduce((a, b) =>
+  // Prefer the edge among unresolved changes so navigation lands on something
+  // still actionable; fall back to all changes when the file is fully resolved.
+  const unresolved = model.hunks.filter((h) => h.state.kind === "unresolved");
+  const pool = unresolved.length > 0 ? unresolved : model.hunks;
+  const target = pool.reduce((a, b) =>
     (edge === "first"
       ? b.result_range.start < a.result_range.start
       : b.result_range.start > a.result_range.start)
@@ -341,32 +345,31 @@ function navigableFiles(): SessionSummary[] {
 async function navigate(direction: "next" | "prev") {
   if (!inTauri || !model) return;
 
-  const nav = navigableFiles();
-  if (nav.length > 1) {
-    const ordered = [...model.hunks].sort((a, b) => a.result_range.start - b.result_range.start);
-    const idx = ordered.findIndex((h) => h.id === currentHunk);
-    const atEnd = ordered.length === 0 || (idx >= 0 && direction === "next" && idx === ordered.length - 1);
-    const atStart = ordered.length === 0 || (idx >= 0 && direction === "prev" && idx === 0);
-    if ((direction === "next" && atEnd) || (direction === "prev" && atStart)) {
-      const found = nav.findIndex((f) => f.session_id === activeFile);
-      // Unknown active file: "next" starts at the first file, "prev" at the last.
-      const cur = found === -1 ? (direction === "next" ? nav.length - 1 : 0) : found;
-      const next =
-        direction === "next"
-          ? nav[(cur + 1) % nav.length]
-          : nav[(cur - 1 + nav.length) % nav.length];
-      await selectFile(next.session_id, direction === "next" ? "first" : "last");
-      return;
-    }
+  // The backend returns the next *unresolved* change in this direction (resolved
+  // changes — the dotted ghosts — are skipped), or null when none remain.
+  const id = await ipc.navigate(model.session_id, direction, currentHunk);
+  if (id !== null) {
+    currentHunk = id;
+    const h = model.hunks.find((x) => x.id === id);
+    if (!h) return;
+    const line = merge.result.state.doc.line(Math.min(h.result_range.start + 1, merge.result.state.doc.lines));
+    merge.result.dispatch({ selection: { anchor: line.from }, scrollIntoView: true });
+    return;
   }
 
-  const id = await ipc.navigate(model.session_id, direction, currentHunk);
-  currentHunk = id;
-  if (id === null) return;
-  const h = model.hunks.find((x) => x.id === id);
-  if (!h) return;
-  const line = merge.result.state.doc.line(Math.min(h.result_range.start + 1, merge.result.state.doc.lines));
-  merge.result.dispatch({ selection: { anchor: line.from }, scrollIntoView: true });
+  // No unresolved change left this direction in the current file: continue at the
+  // adjacent navigable file (wrapping), landing on its first/last unresolved change.
+  const nav = navigableFiles();
+  if (nav.length > 1) {
+    const found = nav.findIndex((f) => f.session_id === activeFile);
+    // Unknown active file: "next" starts at the first file, "prev" at the last.
+    const cur = found === -1 ? (direction === "next" ? nav.length - 1 : 0) : found;
+    const next =
+      direction === "next"
+        ? nav[(cur + 1) % nav.length]
+        : nav[(cur - 1 + nav.length) % nav.length];
+    await selectFile(next.session_id, direction === "next" ? "first" : "last");
+  }
 }
 
 syncScroll(merge.views(), merge.result, scheduleRefresh);

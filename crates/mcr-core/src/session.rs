@@ -428,17 +428,20 @@ impl MergeSession {
         self.to_model()
     }
 
-    /// Next/prev change id in document order. `from = None` starts from the ends.
+    /// Next/prev *unresolved* change id in document order. Resolved changes (drawn
+    /// as a dotted ghost outline) are skipped — arrow navigation only stops on
+    /// changes still needing a decision. `from = None` starts from the ends.
+    /// Returns `None` when no unresolved change remains in that direction.
     pub fn navigate(&self, next: bool, from: Option<usize>) -> Option<usize> {
         let n = self.changes.len();
         if n == 0 {
             return None;
         }
-        match (next, from) {
-            (true, None) => Some(0),
-            (false, None) => Some(n - 1),
-            (true, Some(f)) => Some((f + 1).min(n - 1)),
-            (false, Some(f)) => Some(f.saturating_sub(1)),
+        let unresolved = |i: usize| matches!(self.states[i], HunkState::Unresolved);
+        if next {
+            (from.map_or(0, |f| f + 1)..n).find(|&i| unresolved(i))
+        } else {
+            (0..from.unwrap_or(n)).rev().find(|&i| unresolved(i))
         }
     }
 
