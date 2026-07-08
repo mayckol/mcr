@@ -572,6 +572,13 @@ async function openEmbedded(p: { repoRoot: string; refspec: string; path: string
       apply(m);
       focusFirstChange();
     }
+    // On WebKitGTK the host reveals the webview by repositioning it (it is kept
+    // mapped and merely parked off-screen, so `visibilitychange` never fires
+    // here). `embed-open` is the signal that always arrives on a Git-tab show:
+    // re-measure so a pane that settled while parked re-projects its overlay, and
+    // finish any scroll anchor that was still waiting on a real height.
+    for (const v of merge.views()) v.requestMeasure();
+    if (anchorTarget) tryAnchor(0);
   } catch (e) {
     $("status").textContent = `${p.path}: ${e}`;
   }
