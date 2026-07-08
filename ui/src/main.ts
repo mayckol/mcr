@@ -3,6 +3,7 @@ import { ConnectorOverlay } from "./connectors/overlay";
 import { ControlsLayer } from "./controls/layer";
 import { syncScroll } from "./scroll/sync";
 import { ipc } from "./ipc/client";
+import { EditorView } from "@codemirror/view";
 import { demoModel } from "./demo";
 import { Shortcuts } from "./shortcuts/keymap";
 import { ShortcutsPanel } from "./shortcuts/panel";
@@ -30,6 +31,12 @@ const $ = (id: string) => document.getElementById(id)!;
 
 let model: SessionModel | undefined;
 let currentHunk: number | null = null;
+
+// A scroll-to-change that is still waiting for the result pane to have a real
+// height. In the embedded webview the host's git tab can be hidden (0-height,
+// rAF paused) when a file first opens; the anchor is stashed here and completed
+// the moment the pane is measurable (poll, or the visibility handler on show).
+let anchorTarget: { line: number } | null = null;
 
 // How the app was launched: git mergetool, `mcr diff <refA> <refB>`, or demo.
 let appMode: "merge" | "compare" | "demo" = "demo";
@@ -112,6 +119,11 @@ function scheduleRefresh() {
   requestAnimationFrame(() => {
     rafPending = false;
     if (!model) return;
+    // Mid-layout or hidden (the embed webview's git tab is on another view):
+    // projecting now would cull every band and repaint the overlay blank for a
+    // frame — the "blink". Skip; the ResizeObserver/visibility handler re-fires
+    // this once the pane has a real height.
+    if (merge.result.scrollDOM.clientHeight === 0) return;
     overlay.render(model.hunks);
     controls.render(model.hunks);
   });
@@ -145,21 +157,48 @@ function focusEdgeChange(edge: "first" | "last") {
       : a
   );
   currentHunk = target.id;
-  // Defer past the webview's font/layout measurement (same reason apply() re-runs
-  // scheduleRefresh on a delay); scrolling before layout settles snaps to the top.
-  const go = () => {
-    if (!model) return;
-    const doc = merge.result.state.doc;
-    const line = doc.line(Math.min(target.result_range.start + 1, doc.lines));
-    merge.result.focus();
-    merge.result.dispatch({ selection: { anchor: line.from }, scrollIntoView: true });
-  };
-  requestAnimationFrame(go);
-  setTimeout(go, 120);
+  anchorResultTo(target.result_range.start);
 }
 
 function focusFirstChange() {
   focusEdgeChange("first");
+}
+
+// Center the result pane on the given line, but only once the pane is actually
+// measurable. Scrolling before layout settles (or while the embed tab is hidden,
+// where the pane is 0-height) resolves against an unmeasured viewport and snaps
+// the change to the document bottom — the "diff opens at the bottom" bug. We
+// center rather than `scrollIntoView: true` (nearest) so the first change lands
+// mid-pane with context, never hugging the bottom edge.
+function anchorResultTo(line: number) {
+  anchorTarget = { line };
+  tryAnchor(0);
+}
+
+function tryAnchor(tries: number) {
+  if (!model || !anchorTarget) return;
+  const view = merge.result;
+  if (view.scrollDOM.clientHeight > 0) {
+    const startLine = anchorTarget.line;
+    anchorTarget = null;
+    const commit = () => {
+      if (!model) return;
+      const doc = view.state.doc;
+      const pos = doc.line(Math.min(startLine + 1, doc.lines)).from;
+      view.focus();
+      view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: "center" }) });
+    };
+    view.requestMeasure();
+    commit();
+    // A second pass after the measure settles pins the final position — WebKitGTK
+    // finishes font metrics a frame late, which would otherwise leave it short.
+    requestAnimationFrame(commit);
+    return;
+  }
+  // Pane still 0-height. rAF is paused while the webview is hidden, so this
+  // naturally resumes when the host shows the git tab; the cap only bounds a
+  // slow first layout so we never poll forever.
+  if (tries < 40) requestAnimationFrame(() => tryAnchor(tries + 1));
 }
 
 async function mutate(fn: (sessionId: string) => Promise<SessionModel>): Promise<SessionModel> {
@@ -423,6 +462,17 @@ new ResizeObserver(scheduleRefresh).observe(container);
 window.addEventListener("resize", scheduleRefresh);
 if (document.fonts?.ready) document.fonts.ready.then(scheduleRefresh);
 
+// Embedded, the webview is hidden while the host shows another tab; WebKitGTK
+// pauses rendering and any geometry measured meanwhile is stale. On becoming
+// visible again, re-measure all panes and re-project the overlay so connectors
+// don't blink in — and complete a scroll anchor that was waiting on real height.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible" || !model) return;
+  for (const v of merge.views()) v.requestMeasure();
+  if (anchorTarget) tryAnchor(0);
+  scheduleRefresh();
+});
+
 // Compare mode: Save writes every changed session to its working-tree file (the
 // window stays open); Close exits 0, confirming first when edits are unsaved.
 async function compareSave() {
@@ -492,15 +542,36 @@ function setCompareMode(ref: string) {
   document.title = `MCR — ${ref} ↔ working tree`;
 }
 
+// The file currently shown in embed mode. The host re-fires `embed-open` for the
+// same file whenever its git tab is reactivated (not only on a new selection), so
+// we detect that and refresh in place instead of reopening from scratch.
+let embedTarget: string | null = null;
+
 // Host asked to show a specific file: open its compare session and render it.
-// Fired once per file the user clicks in the host's changed-file list.
 async function openEmbedded(p: { repoRoot: string; refspec: string; path: string }) {
+  const key = `${p.repoRoot} ${p.refspec} ${p.path}`;
+  const sameFile = key === embedTarget && !!model;
   try {
     const m = await ipc.compareOpen(p.repoRoot, p.refspec, p.path);
+    embedTarget = key;
     merge.setLanguage(basename(p.path));
     setCompareMode(p.refspec);
-    apply(m);
-    focusFirstChange();
+    if (sameFile) {
+      // Tab reactivation: the working tree may have changed, so refresh the diff,
+      // but keep the user where they were — re-anchoring to the first change and
+      // stealing focus on every switch is what read as blinking/janky.
+      const top = merge.result.scrollDOM.scrollTop;
+      apply(m);
+      const restore = () => {
+        merge.result.scrollDOM.scrollTop = top;
+        merge.local.scrollDOM.scrollTop = top;
+      };
+      restore();
+      requestAnimationFrame(restore);
+    } else {
+      apply(m);
+      focusFirstChange();
+    }
   } catch (e) {
     $("status").textContent = `${p.path}: ${e}`;
   }
