@@ -1,3 +1,4 @@
+use crate::discovery;
 use crate::manager::{FinishOutcome, Launch, SessionManager, SessionProgress, SessionSummary};
 use mcr_core::SessionModel;
 use tauri::State;
@@ -27,26 +28,51 @@ pub struct Bootstrap {
     pub compare_ref: Option<String>,
 }
 
-/// First call from the UI. Discovers the conflicted set and opens the session(s).
-#[tauri::command]
+/// First call from the UI. Runs the repository discovery (deferred from launch so
+/// the window opens instantly) and registers the file set — sessions themselves
+/// stay lazy and build on selection.
+///
+/// `(async)` runs it on the command thread pool: the scan must never block the
+/// main thread, or the freshly-opened window freezes exactly when it should be
+/// painting its loading state.
+#[tauri::command(async)]
 pub fn bootstrap(mgr: Mgr, launch: State<Launch>) -> Result<Bootstrap, String> {
+    // A webview reload must not re-register the whole set — answer from state.
+    if mgr.mark_booted() {
+        let mode = if launch.compare_ref.is_some() {
+            "compare"
+        } else if launch.passed.is_some() {
+            "merge"
+        } else {
+            "demo"
+        };
+        return Ok(Bootstrap {
+            mode: mode.into(),
+            files: mgr.summaries(),
+            progress: mgr.progress(),
+            active: None,
+            file_name: None,
+            compare_ref: launch.compare_ref.clone(),
+        });
+    }
+
     // Compare launch: no repo ctx (staging/backup stay inert) and no git-passed
     // file (exit code stays 0 — compare has no mergetool contract).
-    if let (Some(root), Some(cmp)) = (&launch.repo_root, &launch.compare) {
-        mgr.set_compare_ctx(root, &cmp.refspec);
+    if let (Some(root), Some(refspec)) = (&launch.repo_root, &launch.compare_ref) {
+        let files = discovery::changed_paths(root, refspec)?;
+        mgr.set_compare_ctx(root, refspec);
         // Register only — sessions build lazily on selection, so a launch with
         // hundreds of changed files stays instant.
-        let ids: Vec<String> = cmp
-            .files
+        let ids: Vec<String> = files
             .iter()
             .map(|f| mgr.register_compare_entry(f))
             .collect();
         let mut single_model = None;
         let mut active_label = None;
-        if cmp.files.len() == 1 {
+        if files.len() == 1 {
             single_model = mgr.model(&ids[0]).ok();
             if single_model.is_some() {
-                active_label = Some(cmp.files[0].path.clone());
+                active_label = Some(files[0].path.clone());
             }
         }
         return Ok(Bootstrap {
@@ -55,7 +81,7 @@ pub fn bootstrap(mgr: Mgr, launch: State<Launch>) -> Result<Bootstrap, String> {
             progress: mgr.progress(),
             active: single_model,
             file_name: active_label.as_deref().and_then(basename),
-            compare_ref: Some(cmp.refspec.clone()),
+            compare_ref: Some(refspec.clone()),
         });
     }
 
@@ -70,9 +96,17 @@ pub fn bootstrap(mgr: Mgr, launch: State<Launch>) -> Result<Bootstrap, String> {
         });
     };
 
+    // One `git ls-files -u` lists every conflicted path with its stages — no
+    // per-file subprocesses, no worktree stat scan.
+    let discovered = launch
+        .repo_root
+        .as_ref()
+        .map(|r| discovery::unmerged_stage_sets(r).unwrap_or_default())
+        .unwrap_or_default();
+
     // No repository context, or nothing discovered: legacy single-file behavior.
     let root = match &launch.repo_root {
-        Some(r) if !launch.files.is_empty() => r.clone(),
+        Some(r) if !discovered.is_empty() => r.clone(),
         _ => {
             let model = mgr.open_files(passed)?;
             mgr.set_git_passed_id(model.session_id.clone());
@@ -87,15 +121,17 @@ pub fn bootstrap(mgr: Mgr, launch: State<Launch>) -> Result<Bootstrap, String> {
         }
     };
 
-    mgr.set_repo(root.clone(), launch.keep_backup);
+    mgr.set_repo(root.clone(), discovery::keep_backup(&root));
+    let single = discovered.len() == 1;
     let mut single_model = None;
-    let single = launch.files.len() == 1;
     let mut active_label = None;
-    for file in &launch.files {
-        let model = mgr.open_entry(&root, file);
+    for (rel, stages) in &discovered {
+        let id = mgr.register_merge_entry(&root, rel, *stages);
         if single {
-            active_label = Some(file.path_label.clone());
-            single_model = Some(model);
+            // A lone conflicted file opens straight into the editor (FR-015);
+            // materialization can reveal binary, which stays accept-only.
+            single_model = mgr.model(&id).ok();
+            active_label = Some(rel.clone());
         }
     }
     mgr.set_git_passed_by_worktree(&passed.merged);
@@ -110,25 +146,25 @@ pub fn bootstrap(mgr: Mgr, launch: State<Launch>) -> Result<Bootstrap, String> {
 }
 
 /// Re-fetch the file list + progress after state changes.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_sessions(mgr: Mgr) -> (Vec<SessionSummary>, SessionProgress) {
     (mgr.summaries(), mgr.progress())
 }
 
 /// Load a specific file's model when the user selects it from the list.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn select_session(mgr: Mgr, session_id: String) -> Result<SessionModel, String> {
     mgr.model(&session_id)
 }
 
 /// Write + stage a resolved file (incremental persist).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_and_stage(mgr: Mgr, session_id: String) -> Result<(), String> {
     mgr.save_and_stage(&session_id)
 }
 
 /// Resolve a whole file to one side directly from the list.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn accept_file(
     mgr: Mgr,
     session_id: String,
@@ -138,7 +174,7 @@ pub fn accept_file(
 }
 
 /// Focus the next unresolved file after `current` (or the first if `None`).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn next_unresolved(mgr: Mgr, current: Option<String>) -> Option<String> {
     let order = mgr.unresolved_order();
     match current {
@@ -153,19 +189,19 @@ pub fn next_unresolved(mgr: Mgr, current: Option<String>) -> Option<String> {
 }
 
 /// Stage all resolved files and report whether the whole merge is done.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn finish(mgr: Mgr) -> Result<FinishOutcome, String> {
     mgr.finish()
 }
 
 /// Exit code Git should see for the file it is blocked on (0 = resolved).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn exit_code(mgr: Mgr) -> i32 {
     mgr.exit_code()
 }
 
 /// Write the resolution back to Git's MERGED file.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_merged(mgr: Mgr, session_id: String) -> Result<(), String> {
     mgr.save_merged(&session_id)
 }
@@ -176,7 +212,7 @@ pub fn quit(code: i32) {
     std::process::exit(code);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn open_session(
     mgr: Mgr,
     local: String,
@@ -187,7 +223,7 @@ pub fn open_session(
     mgr.open(&local, &ancestor, &incoming, whitespace_mode.as_deref())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn apply_change(
     mgr: Mgr,
     session_id: String,
@@ -197,7 +233,7 @@ pub fn apply_change(
     mgr.apply_change(&session_id, hunk_id, &from)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn apply_both(
     mgr: Mgr,
     session_id: String,
@@ -207,7 +243,7 @@ pub fn apply_both(
     mgr.apply_both(&session_id, hunk_id, &first)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn revert_change(
     mgr: Mgr,
     session_id: String,
@@ -216,7 +252,7 @@ pub fn revert_change(
     mgr.revert_change(&session_id, hunk_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn apply_non_conflicting(
     mgr: Mgr,
     session_id: String,
@@ -225,7 +261,7 @@ pub fn apply_non_conflicting(
     mgr.apply_non_conflicting(&session_id, &from)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn edit_result(
     mgr: Mgr,
     session_id: String,
@@ -236,7 +272,7 @@ pub fn edit_result(
     mgr.edit_result(&session_id, start, end, &text)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn edit_full_result(
     mgr: Mgr,
     session_id: String,
@@ -245,17 +281,17 @@ pub fn edit_full_result(
     mgr.set_full_result(&session_id, &text)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn undo(mgr: Mgr, session_id: String) -> Result<SessionModel, String> {
     mgr.undo(&session_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn redo(mgr: Mgr, session_id: String) -> Result<SessionModel, String> {
     mgr.redo(&session_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn navigate(
     mgr: Mgr,
     session_id: String,
@@ -265,7 +301,7 @@ pub fn navigate(
     mgr.navigate(&session_id, &direction, from_hunk)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_whitespace_mode(
     mgr: Mgr,
     session_id: String,

@@ -2,7 +2,7 @@ mod commands;
 mod discovery;
 mod manager;
 
-use manager::{CompareSpec, DiscoveredFile, Launch, MergeFiles, SessionManager};
+use manager::{Launch, MergeFiles, SessionManager};
 
 /// What the command line asked for. Stable CLI contract (editors/IDEs drive it):
 /// `mcr <LOCAL> <BASE> <REMOTE> <MERGED>` (git mergetool) or
@@ -42,7 +42,9 @@ fn classify_args(args: &[String]) -> ParsedArgs {
 }
 
 /// Resolve a compare launch or exit(2) with a usage error on stderr — argument
-/// errors must never open a window (scriptable contract).
+/// errors must never open a window (scriptable contract). Only the cheap
+/// metadata checks run here (`rev-parse` — no worktree scan); the changed-file
+/// discovery is deferred to `bootstrap` so the window opens instantly.
 fn compare_launch(refspec: String, dir: Option<String>) -> Launch {
     let usage = "usage: mcr diff <branch|commit> [dir]";
     let root = match &dir {
@@ -57,26 +59,18 @@ fn compare_launch(refspec: String, dir: Option<String>) -> Launch {
         eprintln!("mcr diff: '{refspec}' does not resolve to a commit\n{usage}");
         std::process::exit(2);
     }
-    let files = match discovery::changed_paths(&root, &refspec) {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("mcr diff: {e}");
-            std::process::exit(2);
-        }
-    };
     Launch {
         passed: None,
         repo_root: Some(root),
-        files: Vec::new(),
-        keep_backup: false,
-        compare: Some(CompareSpec { refspec, files }),
+        compare_ref: Some(refspec),
     }
 }
 
 /// Parse the invocation. Git hands MCR one file per mergetool run, so when
-/// launched inside a worktree we discover the FULL conflicted set ourselves
-/// (research R1/R5); when launched outside a worktree we fall back to the single
-/// file Git passed.
+/// launched inside a worktree `bootstrap` discovers the FULL conflicted set
+/// (research R1/R5); outside a worktree it falls back to the single file Git
+/// passed. Only the repo-root anchor is resolved here — everything that scales
+/// with repository size waits until the window is up.
 fn parse_launch() -> Launch {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let passed = match classify_args(&args) {
@@ -88,35 +82,11 @@ fn parse_launch() -> Launch {
         ParsedArgs::Compare { refspec, dir } => return compare_launch(refspec, dir),
         ParsedArgs::Mergetool(files) => files,
     };
-    match discovery::repo_root(&passed.merged) {
-        Some(root) => {
-            let keep_backup = discovery::keep_backup(&root);
-            let files = discovery::unmerged_paths(&root)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|rel| DiscoveredFile {
-                    worktree_path: std::path::Path::new(&root)
-                        .join(&rel)
-                        .to_string_lossy()
-                        .into_owned(),
-                    path_label: rel,
-                })
-                .collect();
-            Launch {
-                passed: Some(passed),
-                repo_root: Some(root),
-                files,
-                keep_backup,
-                compare: None,
-            }
-        }
-        None => Launch {
-            passed: Some(passed),
-            repo_root: None,
-            files: Vec::new(),
-            keep_backup: false,
-            compare: None,
-        },
+    let repo_root = discovery::repo_root(&passed.merged);
+    Launch {
+        passed: Some(passed),
+        repo_root,
+        compare_ref: None,
     }
 }
 
@@ -199,12 +169,23 @@ pub fn run() {
         // window's CloseRequested handler; without this they'd fall through to a
         // clean status-0 exit and Git would stage an unresolved file.
         .run(|app, event| {
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                use tauri::Manager;
-                let is_merge = app.state::<Launch>().passed.is_some();
-                let resolved = app.state::<SessionManager>().git_passed_resolved();
-                let code = if is_merge && !resolved { 1 } else { 0 };
-                std::process::exit(code);
+            use tauri::Manager;
+            match event {
+                // Spawned as a plain child of another app (fftracking, git),
+                // macOS won't activate us — the window can open BEHIND the
+                // caller and look like it never launched. Claim focus once ready.
+                tauri::RunEvent::Ready => {
+                    if let Some(w) = app.webview_windows().values().next() {
+                        let _ = w.set_focus();
+                    }
+                }
+                tauri::RunEvent::ExitRequested { .. } => {
+                    let is_merge = app.state::<Launch>().passed.is_some();
+                    let resolved = app.state::<SessionManager>().git_passed_resolved();
+                    let code = if is_merge && !resolved { 1 } else { 0 };
+                    std::process::exit(code);
+                }
+                _ => {}
             }
         });
 }

@@ -12,32 +12,17 @@ pub struct MergeFiles {
     pub merged: String,
 }
 
-/// One conflicted file discovered in the merge, before its session is opened.
-#[derive(Clone, Debug)]
-pub struct DiscoveredFile {
-    pub path_label: String,
-    pub worktree_path: String,
-}
-
 /// How the app was launched. `passed` is the single file Git's current invocation
-/// handed us (used for fallback and to identify the file Git is waiting on);
-/// `files` is the full conflicted set discovered from `repo_root` (empty in demo
-/// or single-file fallback).
+/// handed us (used for fallback and to identify the file Git is waiting on).
+/// Discovery of the conflicted/changed set is deferred to `bootstrap`, so the
+/// window opens before any repository scan runs.
 #[derive(Default)]
 pub struct Launch {
     pub passed: Option<MergeFiles>,
     pub repo_root: Option<String>,
-    pub files: Vec<DiscoveredFile>,
-    pub keep_backup: bool,
-    /// Set when launched as `mcr diff <refA> <refB>` — compare mode.
-    pub compare: Option<CompareSpec>,
-}
-
-/// A `mcr diff <ref>` invocation: the ref being compared against the working
-/// tree, and the files that differ.
-pub struct CompareSpec {
-    pub refspec: String,
-    pub files: Vec<discovery::ChangedFile>,
+    /// Set when launched as `mcr diff <ref>` — the validated refspec; the changed
+    /// files are discovered in `bootstrap`.
+    pub compare_ref: Option<String>,
 }
 
 /// Per-file metadata the multi-file session tracks alongside the live MergeSession.
@@ -111,6 +96,11 @@ pub struct SessionManager {
     /// one `git show` + diff per file up front.
     compare_ctx: Mutex<Option<CompareCtx>>,
     compare_pending: Mutex<HashMap<String, discovery::ChangedFile>>,
+    /// Merge entries registered from the batched stage listing whose sessions
+    /// haven't been built yet — same lazy contract as compare_pending.
+    merge_pending: Mutex<HashMap<String, discovery::StageSet>>,
+    /// Guards against a second `bootstrap` (webview reload) re-registering the set.
+    booted: Mutex<bool>,
 }
 
 fn canonical(path: &str) -> String {
@@ -207,39 +197,91 @@ impl SessionManager {
         *self.repo.lock().unwrap() = Some(RepoCtx { root, keep_backup });
     }
 
-    /// Open one discovered conflicted file as a session, recording its list entry
-    /// and write-back path. Reconstructs the three sides from the index stages.
-    pub fn open_entry(&self, root: &str, file: &DiscoveredFile) -> SessionModel {
-        let kind = discovery::conflict_kind(root, &file.path_label);
-        let sides = discovery::reconstruct_sides(root, &file.path_label);
+    /// Whether a full bootstrap already ran (idempotence guard for webview reloads).
+    /// Returns the previous value and marks the manager booted.
+    pub fn mark_booted(&self) -> bool {
+        let mut b = self.booted.lock().unwrap();
+        std::mem::replace(&mut *b, true)
+    }
+
+    /// List one conflicted file WITHOUT any IO — no blob fetch, no diff. The kind
+    /// is provisional (binary is only discoverable from content); the session
+    /// materializes on first selection, exactly like compare entries.
+    pub fn register_merge_entry(
+        &self,
+        root: &str,
+        rel: &str,
+        stages: discovery::StageSet,
+    ) -> String {
+        let worktree_path = std::path::Path::new(root)
+            .join(rel)
+            .to_string_lossy()
+            .into_owned();
         let id = self.next_id();
-        let session = MergeSession::open(
-            id.clone(),
-            &sides.local,
-            &sides.base,
-            &sides.incoming,
-            WhitespaceMode::None,
-        );
-        let model = session.to_model();
-        let resolved = model.status.fully_resolved && kind == ConflictKind::Text;
-        self.sessions.lock().unwrap().insert(id.clone(), session);
-        self.merged_paths
-            .lock()
-            .unwrap()
-            .insert(id.clone(), file.worktree_path.clone());
         self.entries.lock().unwrap().insert(
             id.clone(),
             MergeFileEntry {
-                path_label: file.path_label.clone(),
-                worktree_path: file.worktree_path.clone(),
-                kind,
-                resolved,
+                path_label: rel.to_string(),
+                worktree_path,
+                kind: discovery::kind_from_stages(stages),
+                resolved: false,
                 accepted_raw: false,
                 change_status: None,
             },
         );
-        self.order.lock().unwrap().push(id);
-        model
+        self.merge_pending.lock().unwrap().insert(id.clone(), stages);
+        self.order.lock().unwrap().push(id.clone());
+        id
+    }
+
+    /// Build the session for a lazily-registered merge file: reconstruct the three
+    /// sides from the index stages, detect binary content (raw bytes must never
+    /// round-trip through a lossy text session), and open the diff3 session.
+    fn materialize_merge(&self, session_id: &str) -> Result<(), String> {
+        if self.merge_pending.lock().unwrap().remove(session_id).is_none() {
+            return Ok(()); // not a pending merge entry — nothing to build
+        }
+        let root = self
+            .repo
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|r| r.root.clone())
+            .ok_or_else(|| "no repository for merge session".to_string())?;
+        let (label, worktree_path) = {
+            let entries = self.entries.lock().unwrap();
+            let e = entries
+                .get(session_id)
+                .ok_or_else(|| format!("unknown entry: {session_id}"))?;
+            (e.path_label.clone(), e.worktree_path.clone())
+        };
+        let sides = discovery::reconstruct_raw_sides(&root, &label);
+        if [&sides.base, &sides.local, &sides.incoming]
+            .iter()
+            .any(|b| discovery::blob_is_binary(b))
+        {
+            if let Some(e) = self.entries.lock().unwrap().get_mut(session_id) {
+                e.kind = ConflictKind::Binary;
+            }
+            return Err("binary conflict — use Accept Ours / Theirs".to_string());
+        }
+        let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+        let session = MergeSession::open(
+            session_id.to_string(),
+            &text(&sides.local),
+            &text(&sides.base),
+            &text(&sides.incoming),
+            WhitespaceMode::None,
+        );
+        self.sessions
+            .lock()
+            .unwrap()
+            .insert(session_id.to_string(), session);
+        self.merged_paths
+            .lock()
+            .unwrap()
+            .insert(session_id.to_string(), worktree_path);
+        Ok(())
     }
 
     /// Record the compare launch context (repo root + the ref compared against).
@@ -368,14 +410,17 @@ impl SessionManager {
     fn summary(&self, session_id: &str) -> Option<SessionSummary> {
         let entries = self.entries.lock().unwrap();
         let entry = entries.get(session_id)?;
+        // remaining is None until the session materializes — an unopened file must
+        // never read as resolved just because no session exists to count conflicts.
         let remaining = self
             .sessions
             .lock()
             .unwrap()
             .get(session_id)
-            .map(|s| s.resolution_status().remaining_conflicts)
-            .unwrap_or(0);
-        let resolved = entry.resolved || (entry.kind == ConflictKind::Text && remaining == 0);
+            .map(|s| s.resolution_status().remaining_conflicts);
+        let resolved =
+            entry.resolved || (entry.kind == ConflictKind::Text && remaining == Some(0));
+        let remaining = remaining.unwrap_or(0);
         Some(SessionSummary {
             session_id: session_id.to_string(),
             path_label: entry.path_label.clone(),
@@ -446,9 +491,10 @@ impl SessionManager {
     }
 
     /// Read-only model for a session (file selection). Lazily-registered compare
-    /// files build their session on first call.
+    /// and merge files build their session on first call.
     pub fn model(&self, session_id: &str) -> Result<SessionModel, String> {
         self.materialize_compare(session_id)?;
+        self.materialize_merge(session_id)?;
         self.sessions
             .lock()
             .unwrap()
@@ -526,6 +572,24 @@ impl SessionManager {
             .ok_or_else(|| format!("unknown entry: {session_id}"))?;
 
         if kind == ConflictKind::Text {
+            // A lazily-registered file may not have a session yet (whole-file accept
+            // straight from the list); materializing can also reveal it is binary,
+            // which routes to the raw-accept path below.
+            if let Err(e) = self.materialize_merge(session_id) {
+                let now_binary = self
+                    .entries
+                    .lock()
+                    .unwrap()
+                    .get(session_id)
+                    .is_some_and(|e| e.kind == ConflictKind::Binary);
+                if !now_binary {
+                    return Err(e);
+                }
+                self.accept_special(session_id, from)?;
+                return self
+                    .summary(session_id)
+                    .ok_or_else(|| format!("unknown entry: {session_id}"));
+            }
             // Apply every non-conflicting region plus all conflicts from `side`.
             self.with(session_id, |s| {
                 s.apply_non_conflicting(None);
@@ -793,28 +857,30 @@ mod tests {
         setup_conflicted_repo(&dir);
 
         let root = discovery::repo_root(&dir.join("a.txt").to_string_lossy()).expect("repo root");
-        let mut unmerged = discovery::unmerged_paths(&root).unwrap();
-        unmerged.sort();
-        assert_eq!(unmerged, vec!["a.txt".to_string(), "b.txt".to_string()]);
-        assert_eq!(discovery::conflict_kind(&root, "a.txt"), ConflictKind::Text);
+        let mut discovered = discovery::unmerged_stage_sets(&root).unwrap();
+        discovered.sort_by(|a, b| a.0.cmp(&b.0));
+        let names: Vec<&str> = discovered.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(names, vec!["a.txt", "b.txt"]);
+        assert_eq!(
+            discovery::kind_from_stages(discovered[0].1),
+            ConflictKind::Text
+        );
 
         let m = SessionManager::new();
         m.set_repo(root.clone(), false);
-        let files: Vec<DiscoveredFile> = unmerged
+        let ids: Vec<String> = discovered
             .iter()
-            .map(|rel| DiscoveredFile {
-                path_label: rel.clone(),
-                worktree_path: Path::new(&root).join(rel).to_string_lossy().into_owned(),
-            })
-            .collect();
-        let ids: Vec<String> = files
-            .iter()
-            .map(|f| m.open_entry(&root, f).session_id)
+            .map(|(rel, stages)| m.register_merge_entry(&root, rel, *stages))
             .collect();
 
+        // Registration is lazy: no sessions until a file is selected or accepted,
+        // and unopened files must read unresolved.
+        assert!(m.sessions.lock().unwrap().is_empty());
         let p0 = m.progress();
         assert_eq!(p0.total, 2);
         assert_eq!(p0.resolved_count, 0);
+        m.model(&ids[0]).unwrap();
+        assert_eq!(m.sessions.lock().unwrap().len(), 1);
 
         // Accept local (ours = main) on a.txt; finish still blocked by b.txt.
         let s = m.accept_file(&ids[0], "local").unwrap();
@@ -832,7 +898,7 @@ mod tests {
         assert!(a.contains("main"), "a.txt = {a:?}");
         let b = std::fs::read_to_string(Path::new(&root).join("b.txt")).unwrap();
         assert!(b.contains("feature"), "b.txt = {b:?}");
-        assert!(discovery::unmerged_paths(&root).unwrap().is_empty());
+        assert!(discovery::unmerged_stage_sets(&root).unwrap().is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1214,7 +1280,15 @@ mod tests {
         git_ok(&dir, &["merge", "feature"]);
 
         let root = discovery::repo_root(&dir.join("l1.txt").to_string_lossy()).unwrap();
-        assert_eq!(discovery::conflict_kind(&root, "l1.txt"), ConflictKind::Binary);
+        let discovered = discovery::unmerged_stage_sets(&root).unwrap();
+        assert_eq!(discovered.len(), 1);
+        // Stages alone say Text; content check at materialization flips to Binary.
+        let m = SessionManager::new();
+        m.set_repo(root.clone(), false);
+        let id = m.register_merge_entry(&root, &discovered[0].0, discovered[0].1);
+        let err = m.model(&id).unwrap_err();
+        assert!(err.contains("binary"), "err = {err}");
+        assert_eq!(m.summaries()[0].kind, ConflictKind::Binary);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

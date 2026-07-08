@@ -37,20 +37,54 @@ let activeFile: string | null = null;
 
 const basename = (p?: string | null) => (p ? p.split("/").pop() || p : p ?? undefined);
 
+// All backend session mutations run through one promise chain, so a debounced
+// edit can never interleave with (and clobber) a hunk apply that raced past it.
+let mutationChain: Promise<unknown> = Promise.resolve();
+function enqueue<T>(fn: () => Promise<T>): Promise<T> {
+  const next = mutationChain.then(fn, fn);
+  mutationChain = next.catch(() => {});
+  return next;
+}
+
+// Manual result edits are debounced: the old per-keystroke round-trip shipped the
+// FULL document to the backend (which re-diffs it) on every character — typing in
+// a large file crawled. Anything that reads or persists backend state must call
+// flushEdit() first so no typed text is ever left behind.
+const EDIT_DEBOUNCE_MS = 200;
+let editTimer: number | null = null;
+let pendingEdit: { sessionId: string; text: string } | null = null;
+
+function queueEdit(sessionId: string, text: string) {
+  pendingEdit = { sessionId, text };
+  if (appMode === "compare") dirty.add(sessionId);
+  if (editTimer !== null) clearTimeout(editTimer);
+  editTimer = window.setTimeout(() => void flushEdit(), EDIT_DEBOUNCE_MS);
+}
+
+async function flushEdit(): Promise<void> {
+  if (editTimer !== null) {
+    clearTimeout(editTimer);
+    editTimer = null;
+  }
+  const edit = pendingEdit;
+  pendingEdit = null;
+  if (!edit || !inTauri) return;
+  try {
+    await enqueue(() => ipc.editFullResult(edit.sessionId, edit.text));
+  } catch (e) {
+    $("status").textContent = `Edit failed: ${e}`;
+  }
+  scheduleRefresh();
+}
+
 const merge = new MergeEditor(
   { local: $("pane-local"), result: $("pane-result"), incoming: $("pane-incoming") },
   {
-    onResultEdit: async (fullText) => {
+    onResultEdit: (fullText) => {
       // Free-form manual edit: persist the typed text backend-side WITHOUT
       // re-setting the result doc (which would reset the cursor mid-typing).
       if (!inTauri || !model) return;
-      try {
-        await ipc.editFullResult(model.session_id, fullText);
-        if (appMode === "compare") dirty.add(model.session_id);
-      } catch (e) {
-        $("status").textContent = `Edit failed: ${e}`;
-      }
-      scheduleRefresh();
+      queueEdit(model.session_id, fullText);
     },
     onGeometryChange: () => scheduleRefresh(),
   }
@@ -129,7 +163,8 @@ async function mutate(fn: (sessionId: string) => Promise<SessionModel>): Promise
 
 function act(fn: () => Promise<SessionModel>) {
   if (!model) return;
-  fn()
+  flushEdit()
+    .then(() => enqueue(fn))
     .then(async (next) => {
       if (appMode === "compare") dirty.add(next.session_id);
       apply(next);
@@ -147,7 +182,7 @@ async function afterMutate(next: SessionModel) {
   // Compare mode persists only on explicit Save — never auto-stage.
   if (appMode !== "compare" && next.status.fully_resolved) {
     try {
-      await ipc.saveAndStage(next.session_id);
+      await enqueue(() => ipc.saveAndStage(next.session_id));
     } catch (e) {
       $("status").textContent = `Save failed: ${e}`;
     }
@@ -242,6 +277,7 @@ function showFileList(on: boolean) {
 // Open a file from the list in the shared three-pane editor. Special (non-text)
 // conflicts are resolved only via accept, so they do not open the editor (FR-014).
 async function selectFile(id: string, edge: "first" | "last" = "first") {
+  await flushEdit(); // a pending edit belongs to the session being left
   const summary = files.find((f) => f.session_id === id);
   activeFile = id;
   // Binary blobs cannot be shown as text — they stay accept-only. Text, both-added
@@ -274,7 +310,8 @@ async function selectFile(id: string, edge: "first" | "last" = "first") {
 async function onAccept(id: string, side: Side) {
   if (!inTauri) return;
   try {
-    await ipc.acceptFile(id, side);
+    await flushEdit();
+    await enqueue(() => ipc.acceptFile(id, side));
     await refreshList();
     if (id === activeFile) {
       const summary = files.find((f) => f.session_id === id);
@@ -287,6 +324,7 @@ async function onAccept(id: string, side: Side) {
 
 async function gotoNextUnresolved() {
   if (!inTauri || files.length === 0) return;
+  await flushEdit();
   const id = await ipc.nextUnresolved(activeFile);
   if (id) await selectFile(id);
 }
@@ -296,6 +334,7 @@ $("next-file").addEventListener("click", gotoNextUnresolved);
 // the multi-file path stages resolved files and confirms before leaving any
 // conflicts behind, exiting with the code Git expects for the file it passed.
 async function exitFlow(abort: boolean) {
+  if (!abort) await flushEdit();
   if (abort) {
     // Abort must never save, stage, or exit 0 — a non-zero exit tells Git the
     // passed file stays conflicted. Files already staged this session are kept
@@ -344,6 +383,7 @@ function navigableFiles(): SessionSummary[] {
 // change of the next file in the list (wrapping); "prev" mirrors that backwards.
 async function navigate(direction: "next" | "prev") {
   if (!inTauri || !model) return;
+  await flushEdit();
 
   // The backend returns the next *unresolved* change in this direction (resolved
   // changes — the dotted ghosts — are skipped), or null when none remain.
@@ -380,10 +420,11 @@ if (document.fonts?.ready) document.fonts.ready.then(scheduleRefresh);
 // Compare mode: Save writes every changed session to its working-tree file (the
 // window stays open); Close exits 0, confirming first when edits are unsaved.
 async function compareSave() {
+  await flushEdit();
   const ids = [...dirty];
   try {
     for (const id of ids) {
-      await ipc.saveMerged(id);
+      await enqueue(() => ipc.saveMerged(id));
       dirty.delete(id);
     }
     $("status").textContent = `Saved ${ids.length} file(s) to working tree`;
@@ -447,7 +488,17 @@ function setCompareMode(ref: string) {
 
 async function boot() {
   if (inTauri) {
-    const b = await ipc.bootstrap();
+    // Discovery now runs inside bootstrap (the window opens before any repo
+    // scan) — tell the user what the wait is while a big repository is listed.
+    $("status").textContent = "Scanning repository…";
+    let b;
+    try {
+      b = await ipc.bootstrap();
+    } catch (e) {
+      $("status").textContent = `Failed to read the repository: ${e}`;
+      return;
+    }
+    $("status").textContent = "";
     if (b.mode === "merge" || b.mode === "compare") {
       appMode = b.mode;
       if (b.mode === "compare") {
@@ -458,8 +509,10 @@ async function boot() {
       files = b.files;
       progress = b.progress;
       // The list is the entry point only when more than one file conflicts
-      // (FR-001); a single conflicted file opens straight into the editor (FR-015).
-      if (files.length > 1) {
+      // (FR-001); a single conflicted file opens straight into the editor
+      // (FR-015) — unless it could not open as text (binary), in which case the
+      // list is the only place its accept buttons live.
+      if (files.length > 1 || (files.length === 1 && !b.active)) {
         showFileList(true);
         fileList.render(files, activeFile, progress);
       }

@@ -22,13 +22,6 @@ pub enum ConflictKind {
     BothAdded,
 }
 
-/// The three reconstructed sides of one conflicted file (text).
-pub struct Sides {
-    pub base: String,
-    pub local: String,
-    pub incoming: String,
-}
-
 /// A `git` Command that never flashes a console window: MCR is a GUI-subsystem
 /// binary on Windows, where a plain child process allocates a visible console —
 /// one flash per git call, several calls per file.
@@ -82,14 +75,40 @@ pub fn repo_root(from: &str) -> Option<String> {
     }
 }
 
-/// Repo-relative paths of every unmerged (conflicted) file (`--diff-filter=U`).
-pub fn unmerged_paths(root: &str) -> Result<Vec<String>, String> {
-    let out = git(root, &["diff", "--name-only", "--diff-filter=U", "-z"])?;
-    Ok(out
-        .split(|&b| b == 0)
-        .filter(|s| !s.is_empty())
-        .map(|s| String::from_utf8_lossy(s).into_owned())
-        .collect())
+/// Which index stages exist for one unmerged path.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StageSet {
+    pub base: bool,
+    pub local: bool,
+    pub incoming: bool,
+}
+
+/// Every unmerged path with its present stages, from ONE `git ls-files -u` over
+/// the whole index — no per-file subprocesses and no worktree stat scan (unlike
+/// `git diff`), so it stays fast in large repositories.
+pub fn unmerged_stage_sets(root: &str) -> Result<Vec<(String, StageSet)>, String> {
+    let out = git(root, &["ls-files", "-u", "-z"])?;
+    let mut order: Vec<String> = Vec::new();
+    let mut sets: std::collections::HashMap<String, StageSet> = std::collections::HashMap::new();
+    // Each record: "<mode> <sha> <stage>\t<path>", NUL-terminated.
+    for rec in out.split(|&b| b == 0).filter(|s| !s.is_empty()) {
+        let rec = String::from_utf8_lossy(rec);
+        let Some((meta, path)) = rec.split_once('\t') else { continue };
+        let Some(stage) = meta.split_whitespace().nth(2).and_then(|s| s.parse::<u8>().ok()) else {
+            continue;
+        };
+        let entry = sets.entry(path.to_string()).or_insert_with(|| {
+            order.push(path.to_string());
+            StageSet::default()
+        });
+        match stage {
+            STAGE_BASE => entry.base = true,
+            STAGE_LOCAL => entry.local = true,
+            STAGE_INCOMING => entry.incoming = true,
+            _ => {}
+        }
+    }
+    Ok(order.into_iter().map(|p| { let s = sets[&p]; (p, s) }).collect())
 }
 
 fn stages_present(root: &str, path: &str) -> Result<Vec<u8>, String> {
@@ -122,33 +141,31 @@ fn is_binary(bytes: &[u8]) -> bool {
     bytes.contains(&0) || std::str::from_utf8(bytes).is_err()
 }
 
-/// Classify the conflict at `path` so the UI can route text vs. accept-only files.
-pub fn conflict_kind(root: &str, path: &str) -> ConflictKind {
-    let stages = stages_present(root, path).unwrap_or_default();
-    let has_base = stages.contains(&STAGE_BASE);
-    let has_local = stages.contains(&STAGE_LOCAL);
-    let has_incoming = stages.contains(&STAGE_INCOMING);
-
-    if !has_local || !has_incoming {
+/// Provisional conflict kind from the stages alone — no blob reads. Binary is
+/// only discoverable from content, so it is detected at session materialization.
+pub fn kind_from_stages(stages: StageSet) -> ConflictKind {
+    if !stages.local || !stages.incoming {
         return ConflictKind::DeleteModify;
     }
-    if is_binary(&stage_blob(root, STAGE_LOCAL, path)) || is_binary(&stage_blob(root, STAGE_INCOMING, path)) {
-        return ConflictKind::Binary;
-    }
-    if !has_base {
+    if !stages.base {
         return ConflictKind::BothAdded;
     }
     ConflictKind::Text
 }
 
-/// Reconstruct the three text sides from the index stages. A missing stage (e.g. a
-/// deleted side) yields an empty string so diff3 still aligns it.
-pub fn reconstruct_sides(root: &str, path: &str) -> Sides {
-    let read = |stage: u8| String::from_utf8_lossy(&stage_blob(root, stage, path)).into_owned();
-    Sides {
-        base: read(STAGE_BASE),
-        local: read(STAGE_LOCAL),
-        incoming: read(STAGE_INCOMING),
+/// The three raw sides of one conflicted file, straight from the index stages.
+/// A missing stage (e.g. a deleted side) yields empty bytes so diff3 still aligns.
+pub struct RawSides {
+    pub base: Vec<u8>,
+    pub local: Vec<u8>,
+    pub incoming: Vec<u8>,
+}
+
+pub fn reconstruct_raw_sides(root: &str, path: &str) -> RawSides {
+    RawSides {
+        base: stage_blob(root, STAGE_BASE, path),
+        local: stage_blob(root, STAGE_LOCAL, path),
+        incoming: stage_blob(root, STAGE_INCOMING, path),
     }
 }
 
