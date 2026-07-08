@@ -1044,6 +1044,25 @@ mod tests {
     }
 
     #[test]
+    fn repo_root_dir_anchors_at_the_directory_itself() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("mcr-rootdir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        setup_compare_repo(&dir);
+        let anchored = discovery::repo_root_dir(&dir.to_string_lossy()).expect("repo root");
+        // Canonicalize both sides: git prints the symlink-resolved toplevel
+        // (/private/tmp vs /tmp on macOS).
+        let canon = |p: &str| std::fs::canonicalize(p).unwrap();
+        assert_eq!(canon(&anchored), canon(&dir.to_string_lossy()));
+        // A dir OUTSIDE any repository anchors nowhere — the old file-oriented
+        // path took the parent, which could accidentally be a repo.
+        assert!(discovery::repo_root_dir("/").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn changed_paths_parses_statuses() {
         if Command::new("git").arg("--version").output().is_err() {
             return;

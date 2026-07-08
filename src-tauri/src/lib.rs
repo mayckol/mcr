@@ -48,7 +48,7 @@ fn classify_args(args: &[String]) -> ParsedArgs {
 fn compare_launch(refspec: String, dir: Option<String>) -> Launch {
     let usage = "usage: mcr diff <branch|commit> [dir]";
     let root = match &dir {
-        Some(d) => discovery::repo_root(&std::path::Path::new(d).join(".").to_string_lossy()),
+        Some(d) => discovery::repo_root_dir(d),
         None => discovery::repo_root_cwd(),
     };
     let Some(root) = root else {

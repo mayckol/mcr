@@ -197,6 +197,29 @@ pub fn repo_root_cwd() -> Option<String> {
     }
 }
 
+/// Repository root for an explicit DIRECTORY anchor (`mcr diff <ref> [dir]`).
+/// `repo_root` is for file paths and takes the parent first — routing a
+/// directory through it anchored at the directory's parent (Rust normalizes a
+/// trailing `.` away, so the old `join(".")` compensation never held) and
+/// "not inside a git repository" followed.
+pub fn repo_root_dir(dir: &str) -> Option<String> {
+    let out = git_cmd()
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let root = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if root.is_empty() {
+        None
+    } else {
+        Some(root)
+    }
+}
+
 /// Whether `refspec` names a commit (branch, tag, or SHA) in the repository.
 pub fn resolves_to_commit(root: &str, refspec: &str) -> bool {
     git_cmd()
