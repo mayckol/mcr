@@ -11,7 +11,7 @@ import { ExitConfirmModal } from "./confirm/modal";
 import { SettingsPanel } from "./settings/panel";
 import { applyTheme, storedThemeId } from "./theme/manager";
 import { applyFont } from "./theme/font";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import type { SessionModel, SessionSummary, SessionProgress, Side } from "./ipc/types";
 
 // Paint the persisted theme before any editor mounts: chrome, bands, gutters,
@@ -19,6 +19,12 @@ import type { SessionModel, SessionSummary, SessionProgress, Side } from "./ipc/
 applyTheme(storedThemeId());
 
 const inTauri = "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
+
+// Embedded inside a host app (fftracking) as a child webview over its diff pane:
+// there is no CLI `Launch`, so the file to show arrives at runtime via the
+// `mcr://embed-open` event instead of `bootstrap`. The host injects
+// `__FF_EMBED__` as a webview initialization script (runs before this bundle).
+const embed = inTauri && "__FF_EMBED__" in window;
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -486,7 +492,38 @@ function setCompareMode(ref: string) {
   document.title = `MCR — ${ref} ↔ working tree`;
 }
 
+// Host asked to show a specific file: open its compare session and render it.
+// Fired once per file the user clicks in the host's changed-file list.
+async function openEmbedded(p: { repoRoot: string; refspec: string; path: string }) {
+  try {
+    const m = await ipc.compareOpen(p.repoRoot, p.refspec, p.path);
+    merge.setLanguage(basename(p.path));
+    setCompareMode(p.refspec);
+    apply(m);
+    focusFirstChange();
+  } catch (e) {
+    $("status").textContent = `${p.path}: ${e}`;
+  }
+}
+
+// Embedded boot: no repository scan and no file list — the two-pane compare
+// chrome is fixed, and the host drives which file is shown via `embed-open`.
+async function bootEmbedded() {
+  appMode = "compare";
+  document.body.classList.add("ff-embed");
+  showFileList(false);
+  await listen<{ repoRoot: string; refspec: string; path: string }>(
+    "mcr://embed-open",
+    (e) => void openEmbedded(e.payload),
+  );
+  // The host may have emitted the first open before this listener existed (the
+  // webview was still booting); announce readiness so it (re)sends the current file.
+  await emit("mcr://embed-ready", {});
+  $("status").textContent = "";
+}
+
 async function boot() {
+  if (embed) return bootEmbedded();
   if (inTauri) {
     // Discovery now runs inside bootstrap (the window opens before any repo
     // scan) — tell the user what the wait is while a big repository is listed.

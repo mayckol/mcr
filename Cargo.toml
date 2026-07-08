@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/mcr-core"]
+members = ["crates/mcr-core", "crates/mcr-session"]
 exclude = ["src-tauri"]
 
 # src-tauri is a standalone crate (not a workspace member) so `cargo test -p mcr-core`

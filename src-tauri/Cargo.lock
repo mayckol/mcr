@@ -1684,6 +1684,7 @@ name = "mcr-app"
 version = "0.3.7"
 dependencies = [
  "mcr-core",
+ "mcr-session",
  "serde",
  "serde_json",
  "tauri",
@@ -1697,6 +1698,14 @@ dependencies = [
  "serde",
  "serde_json",
  "similar",
+]
+
+[[package]]
+name = "mcr-session"
+version = "0.1.0"
+dependencies = [
+ "mcr-core",
+ "serde",
 ]
 
 [[package]]

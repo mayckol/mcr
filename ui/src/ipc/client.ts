@@ -35,6 +35,9 @@ export const ipc = {
   selectSession: (sessionId: string) =>
     invoke<SessionModel>("select_session", { sessionId }),
 
+  compareOpen: (root: string, refspec: string, path: string) =>
+    invoke<SessionModel>("compare_open", { root, refspec, path }),
+
   saveAndStage: (sessionId: string) => invoke<void>("save_and_stage", { sessionId }),
 
   acceptFile: (sessionId: string, from: Side) =>

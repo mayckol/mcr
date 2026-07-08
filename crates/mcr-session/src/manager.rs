@@ -331,6 +331,39 @@ impl SessionManager {
         id
     }
 
+    /// Clear the compare view so a fresh single-file compare can open without
+    /// leftover entries/sessions from a prior file. An embedding host that only
+    /// ever compares drives this per file click; it holds no merge state, so
+    /// clearing the shared maps wholesale is safe here.
+    pub fn reset_compare(&self) {
+        self.sessions.lock().unwrap().clear();
+        self.merged_paths.lock().unwrap().clear();
+        self.entries.lock().unwrap().clear();
+        self.order.lock().unwrap().clear();
+        self.compare_pending.lock().unwrap().clear();
+        *self.compare_ctx.lock().unwrap() = None;
+    }
+
+    /// Open (or re-open) one file's compare session on demand — the runtime entry
+    /// an embedding host drives in place of the CLI `Launch`/`bootstrap` path.
+    /// Reuses the same lazy materialization (`ref` blob vs worktree) as a launch
+    /// compare, so binary/non-UTF8 files surface the same error.
+    pub fn open_compare_single(
+        &self,
+        root: &str,
+        refspec: &str,
+        path: &str,
+    ) -> Result<SessionModel, String> {
+        self.reset_compare();
+        self.set_compare_ctx(root, refspec);
+        let id = self.register_compare_entry(&discovery::ChangedFile {
+            status: "M".to_string(),
+            path: path.to_string(),
+            old_path: None,
+        });
+        self.model(&id)
+    }
+
     /// Build the session for a lazily-registered compare file: local = blob at
     /// the ref, base = incoming = the current worktree content — so the result
     /// projection IS the working file and every hunk is a place the ref differs
@@ -1255,6 +1288,32 @@ mod tests {
         // Selecting one file materializes exactly that session.
         m.model(&ids[0]).unwrap();
         assert_eq!(m.sessions.lock().unwrap().len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_compare_single_reopens_and_resets() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("mcr-cmp-single-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (_main, feature) = setup_compare_repo(&dir);
+        let root = dir.to_string_lossy().into_owned();
+
+        let m = SessionManager::new();
+        // f.txt differs between the worktree (main) and `feature`.
+        let model = m.open_compare_single(&root, &feature, "f.txt").unwrap();
+        assert_eq!(model.panes.local.join("\n"), "one\nfeature\nthree\n");
+        assert_eq!(m.summaries().len(), 1, "only the opened file is listed");
+
+        // Re-opening another file resets — the prior entry/session is gone.
+        let sid_before = model.session_id.clone();
+        let next = m.open_compare_single(&root, &feature, "gone.txt").unwrap();
+        assert_eq!(m.summaries().len(), 1);
+        assert_ne!(next.session_id, sid_before);
+        assert!(m.model(&sid_before).is_err(), "stale session dropped");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

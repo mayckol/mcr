@@ -1,5 +1,5 @@
-use crate::discovery;
-use crate::manager::{FinishOutcome, Launch, SessionManager, SessionProgress, SessionSummary};
+use mcr_session::discovery;
+use mcr_session::manager::{FinishOutcome, Launch, SessionManager, SessionProgress, SessionSummary};
 use mcr_core::SessionModel;
 use tauri::State;
 
@@ -155,6 +155,18 @@ pub fn list_sessions(mgr: Mgr) -> (Vec<SessionSummary>, SessionProgress) {
 #[tauri::command(async)]
 pub fn select_session(mgr: Mgr, session_id: String) -> Result<SessionModel, String> {
     mgr.model(&session_id)
+}
+
+/// Open one file's compare session at runtime (no CLI `Launch`) — the entry point
+/// an embedding host calls per file click. Resets any prior compare view.
+#[tauri::command(async)]
+pub fn compare_open(
+    mgr: Mgr,
+    root: String,
+    refspec: String,
+    path: String,
+) -> Result<SessionModel, String> {
+    mgr.open_compare_single(&root, &refspec, &path)
 }
 
 /// Write + stage a resolved file (incremental persist).

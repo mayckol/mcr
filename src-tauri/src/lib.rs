@@ -1,8 +1,7 @@
 mod commands;
-mod discovery;
-mod manager;
 
-use manager::{Launch, MergeFiles, SessionManager};
+use mcr_session::discovery;
+use mcr_session::manager::{Launch, MergeFiles, SessionManager};
 
 /// What the command line asked for. Stable CLI contract (editors/IDEs drive it):
 /// `mcr <LOCAL> <BASE> <REMOTE> <MERGED>` (git mergetool) or
@@ -144,6 +143,7 @@ pub fn run() {
             commands::bootstrap,
             commands::list_sessions,
             commands::select_session,
+            commands::compare_open,
             commands::open_session,
             commands::apply_change,
             commands::apply_both,

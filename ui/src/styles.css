@@ -555,3 +555,8 @@ button { font: inherit; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+/* Embedded as a child webview inside a host app (fftracking): there is no window
+   to close, and the host supplies the file/path chrome above the panes. */
+body.ff-embed #foot-cancel { display: none !important; }
+body.ff-embed .brand-logo { display: none; }
