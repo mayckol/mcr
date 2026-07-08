@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.3.10
+
+- **Embedded compare re-projects reliably when the host shows its git tab.** The
+  embedding host reveals the diff webview by repositioning it (kept mapped, parked
+  off-screen), so `visibilitychange` never fires and a same-size reveal does not
+  trip the resize observer. The `mcr://embed-open` event — the one signal that
+  always arrives on a tab show — now re-measures the panes and completes a pending
+  scroll anchor, so the overlay re-projects and the diff never stays parked
+  off-screen.
+- Standalone app and CLI behaviour are unchanged.
+
 ## v0.3.9
 
 - **Embedded compare no longer opens at the bottom or blinks.** When the host's
