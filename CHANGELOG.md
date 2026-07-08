@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.3.7
+
+- **`mcr diff <ref> [dir]` anchors at the directory itself.** The explicit dir
+  anchor resolved to the directory's *parent* (a path-normalization bug the old
+  `join(".")` compensation never actually fixed), so launches that pass the
+  repository explicitly — like fftracking's on Linux — always failed with "not
+  inside a git repository".
+
 ## v0.3.6
 
 - **The window opens instantly, on any repository size.** Repository discovery
