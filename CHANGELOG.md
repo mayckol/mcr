@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.3.8
+
+- **Reusable `mcr-session` crate.** The framework-agnostic session store and git
+  discovery moved out of the Tauri binary into a standalone `mcr-session` lib
+  crate, so an embedding host can drive the same merge/compare engine without
+  pulling in the webview toolchain.
+- **Embeddable single-file compare.** A runtime `compare_open` command opens one
+  file's diff without going through the CLI launch path, paired with an embedded
+  UI boot mode (gated on `__FF_EMBED__`) that renders a single two-pane compare
+  driven by `mcr://embed-open` events. The UI now builds under a configurable
+  base (`MCR_BASE`) for sub-path hosting.
+- Standalone app and CLI behaviour are unchanged.
+
 ## v0.3.7
 
 - **`mcr diff <ref> [dir]` anchors at the directory itself.** The explicit dir
