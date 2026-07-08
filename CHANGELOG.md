@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.3.9
+
+- **Embedded compare no longer opens at the bottom or blinks.** When the host's
+  git tab is hidden the webview pane is 0-height and rendering is paused, so the
+  first-change scroll used to resolve against an unmeasured viewport and snap to
+  the document bottom. The anchor is now stashed and completed once the pane has
+  a real height (centering the change), overlay projection is skipped while the
+  pane is 0-height to avoid a blank-repaint blink, and re-opening the
+  already-shown file refreshes in place instead of re-anchoring and stealing
+  focus.
+- Standalone app and CLI behaviour are unchanged.
+
 ## v0.3.8
 
 - **Reusable `mcr-session` crate.** The framework-agnostic session store and git

@@ -1681,7 +1681,7 @@ dependencies = [
 
 [[package]]
 name = "mcr-app"
-version = "0.3.8"
+version = "0.3.9"
 dependencies = [
  "mcr-core",
  "mcr-session",
