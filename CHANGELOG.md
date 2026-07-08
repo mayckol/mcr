@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.3.11
+
+- **The embed can now be hosted in a same-origin iframe.** Tauri cannot position
+  child webviews on Linux (they land in the window's GtkBox, where `set_position`
+  is a silent no-op and the webview stacks at the window bottom —
+  tauri-apps/tauri#13071), so hosts there render `/mcr/index.html?embed=1` in an
+  iframe instead. Iframes get no Tauri IPC (init scripts are main-frame-only), so
+  in that mode every command rides a postMessage bridge to the host page, and the
+  file-to-show arrives as an `{mcr:"open"}` message. A pending scroll anchor also
+  completes in the first frame the pane becomes measurable, so a reveal paints
+  already centered on the change.
+- Standalone app, CLI, and the native (macOS) embed are unchanged.
+
 ## v0.3.10
 
 - **Embedded compare re-projects reliably when the host shows its git tab.** The
