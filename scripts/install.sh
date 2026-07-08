@@ -47,6 +47,7 @@ uninstall() {
       ;;
     Linux)
       rm -f "$PREFIX/bin/mcr" "$PREFIX/bin/mcr.AppImage" "$PREFIX/bin/mcr-mergetool" 2>/dev/null || true
+      rm -rf "$PREFIX/libexec/mcr" 2>/dev/null || true
       rm -f "$PREFIX/share/applications/mcr.desktop" 2>/dev/null || true
       rm -f "$PREFIX/share/icons/hicolor/256x256/apps/mcr.png" 2>/dev/null || true
       command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$PREFIX/share/applications" >/dev/null 2>&1 || true
@@ -192,18 +193,39 @@ MCRCLI
     chmod +x "$APP.new"
     mv -f "$APP.new" "$APP"
 
+    # Extract the image once at install time (`--appimage-extract` needs no FUSE):
+    # launches skip both the libfuse2 requirement and the mount/self-extract cost,
+    # so MCR starts fast everywhere — including when spawned by other apps.
+    LIBEXEC="$PREFIX/libexec/mcr"
+    RUN="$APP"
+    EXTMP="$LIBEXEC.new"
+    rm -rf "$EXTMP"; mkdir -p "$EXTMP"
+    if (cd "$EXTMP" && "$APP" --appimage-extract >/dev/null 2>&1) \
+        && [ -x "$EXTMP/squashfs-root/AppRun" ]; then
+      rm -rf "$LIBEXEC"
+      mv "$EXTMP" "$LIBEXEC"
+      RUN="$LIBEXEC/squashfs-root/AppRun"
+      log "extracted for fast FUSE-free launches: $RUN"
+    else
+      rm -rf "$EXTMP"
+      log "could not pre-extract the AppImage — launches use the image directly"
+    fi
+
     # Wrapper. `mcr diff <refA> <refB>` runs in the FOREGROUND (like git difftool)
     # and passes the caller's cwd as the repo anchor — the AppImage chdir's into
     # its /tmp/.mount_* mount, so cwd-based repo discovery would misresolve.
     # Other launches detach, resolving a relative path arg to absolute first.
     cat > "$BIN.new" <<WRAP
 #!/bin/sh
-app="$APP"
+app="$RUN"
+# Only the raw AppImage needs the FUSE dance; the pre-extracted AppRun does not.
 # AppImage runtime needs libfuse2; on distros without it the image won't mount and
 # nothing launches — fall back to self-extraction when libfuse2 is missing.
-if ! { command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q 'libfuse\.so\.2'; }; then
-  export APPIMAGE_EXTRACT_AND_RUN=1
-fi
+case "\$app" in *.AppImage)
+  if ! { command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q 'libfuse\.so\.2'; }; then
+    export APPIMAGE_EXTRACT_AND_RUN=1
+  fi
+esac
 if [ "\${1:-}" = "diff" ]; then
   # Append the cwd anchor only when the caller didn't pass a dir themselves.
   if [ "\$#" -eq 2 ]; then exec "\$app" "\$@" "\$(pwd)"; fi
@@ -247,7 +269,7 @@ EOF
     command -v gtk-update-icon-cache  >/dev/null 2>&1 && gtk-update-icon-cache -f "$PREFIX/share/icons/hicolor" >/dev/null 2>&1 || true
 
     log "menu entry: $APPS_DIR/mcr.desktop"
-    install_mergetool "$APP"
+    install_mergetool "$RUN"
     case ":$PATH:" in *":$BIN_DIR:"*) : ;; *) log "add $BIN_DIR to your PATH" ;; esac
     ;;
   *) fail "unsupported OS: $os_raw" ;;
