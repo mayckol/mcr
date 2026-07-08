@@ -10,6 +10,49 @@ import type {
 // Typed wrappers over the Tauri command surface (contracts/ipc-merge-session.md).
 // The UI only dispatches intents through these; it never derives merge state.
 
+// Embedded as a same-origin iframe (the Linux host): Tauri injects its IPC
+// bootstrap into the main frame only, so a subframe has no `__TAURI_INTERNALS__`
+// and cannot invoke directly. Every command instead rides a postMessage bridge —
+// `{mcr:"invoke", id, cmd, args}` up to the host page, which executes the real
+// invoke and answers `{mcr:"result", id, ok, value|error}`.
+export const framedEmbed = (() => {
+  try {
+    return window.parent !== window && new URLSearchParams(window.location.search).has("embed");
+  } catch {
+    return false;
+  }
+})();
+const hasInternals = "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
+
+interface PendingCall {
+  resolve: (v: unknown) => void;
+  reject: (e: unknown) => void;
+}
+const pending = new Map<number, PendingCall>();
+let callId = 0;
+
+if (framedEmbed && !hasInternals) {
+  window.addEventListener("message", (e) => {
+    if (e.source !== window.parent) return;
+    const d = e.data as { mcr?: string; id?: number; ok?: boolean; value?: unknown; error?: unknown };
+    if (!d || d.mcr !== "result" || typeof d.id !== "number") return;
+    const p = pending.get(d.id);
+    if (!p) return;
+    pending.delete(d.id);
+    if (d.ok) p.resolve(d.value);
+    else p.reject(d.error);
+  });
+}
+
+function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  if (!framedEmbed || hasInternals) return invoke<T>(cmd, args);
+  return new Promise<T>((resolve, reject) => {
+    const id = ++callId;
+    pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
+    window.parent.postMessage({ mcr: "invoke", id, cmd, args }, "*");
+  });
+}
+
 export interface OpenInput {
   local: string;
   ancestor: string;
@@ -28,59 +71,59 @@ export interface Bootstrap {
 }
 
 export const ipc = {
-  bootstrap: () => invoke<Bootstrap>("bootstrap"),
+  bootstrap: () => call<Bootstrap>("bootstrap"),
 
-  listSessions: () => invoke<[SessionSummary[], SessionProgress]>("list_sessions"),
+  listSessions: () => call<[SessionSummary[], SessionProgress]>("list_sessions"),
 
   selectSession: (sessionId: string) =>
-    invoke<SessionModel>("select_session", { sessionId }),
+    call<SessionModel>("select_session", { sessionId }),
 
   compareOpen: (root: string, refspec: string, path: string) =>
-    invoke<SessionModel>("compare_open", { root, refspec, path }),
+    call<SessionModel>("compare_open", { root, refspec, path }),
 
-  saveAndStage: (sessionId: string) => invoke<void>("save_and_stage", { sessionId }),
+  saveAndStage: (sessionId: string) => call<void>("save_and_stage", { sessionId }),
 
   acceptFile: (sessionId: string, from: Side) =>
-    invoke<SessionSummary>("accept_file", { sessionId, from }),
+    call<SessionSummary>("accept_file", { sessionId, from }),
 
   nextUnresolved: (current: string | null) =>
-    invoke<string | null>("next_unresolved", { current }),
+    call<string | null>("next_unresolved", { current }),
 
-  finish: () => invoke<FinishOutcome>("finish"),
+  finish: () => call<FinishOutcome>("finish"),
 
-  exitCode: () => invoke<number>("exit_code"),
+  exitCode: () => call<number>("exit_code"),
 
-  saveMerged: (sessionId: string) => invoke<void>("save_merged", { sessionId }),
+  saveMerged: (sessionId: string) => call<void>("save_merged", { sessionId }),
 
-  quit: (code: number) => invoke<void>("quit", { code }),
+  quit: (code: number) => call<void>("quit", { code }),
 
   openSession: (input: OpenInput) =>
-    invoke<SessionModel>("open_session", input as unknown as Record<string, unknown>),
+    call<SessionModel>("open_session", input as unknown as Record<string, unknown>),
 
   applyChange: (sessionId: string, hunkId: number, from: Side) =>
-    invoke<SessionModel>("apply_change", { sessionId, hunkId, from }),
+    call<SessionModel>("apply_change", { sessionId, hunkId, from }),
 
   applyBoth: (sessionId: string, hunkId: number, first: Side) =>
-    invoke<SessionModel>("apply_both", { sessionId, hunkId, first }),
+    call<SessionModel>("apply_both", { sessionId, hunkId, first }),
 
   revertChange: (sessionId: string, hunkId: number) =>
-    invoke<SessionModel>("revert_change", { sessionId, hunkId }),
+    call<SessionModel>("revert_change", { sessionId, hunkId }),
 
   applyNonConflicting: (sessionId: string, from: Side | "both") =>
-    invoke<SessionModel>("apply_non_conflicting", { sessionId, from }),
+    call<SessionModel>("apply_non_conflicting", { sessionId, from }),
 
   editResult: (sessionId: string, start: number, end: number, text: string) =>
-    invoke<SessionModel>("edit_result", { sessionId, start, end, text }),
+    call<SessionModel>("edit_result", { sessionId, start, end, text }),
 
   editFullResult: (sessionId: string, text: string) =>
-    invoke<SessionModel>("edit_full_result", { sessionId, text }),
+    call<SessionModel>("edit_full_result", { sessionId, text }),
 
-  undo: (sessionId: string) => invoke<SessionModel>("undo", { sessionId }),
-  redo: (sessionId: string) => invoke<SessionModel>("redo", { sessionId }),
+  undo: (sessionId: string) => call<SessionModel>("undo", { sessionId }),
+  redo: (sessionId: string) => call<SessionModel>("redo", { sessionId }),
 
   navigate: (sessionId: string, direction: "next" | "prev", fromHunk: number | null) =>
-    invoke<number | null>("navigate", { sessionId, direction, fromHunk }),
+    call<number | null>("navigate", { sessionId, direction, fromHunk }),
 
   setWhitespaceMode: (sessionId: string, mode: "none" | "ignore_trailing" | "ignore_all") =>
-    invoke<SessionModel>("set_whitespace_mode", { sessionId, mode }),
+    call<SessionModel>("set_whitespace_mode", { sessionId, mode }),
 };

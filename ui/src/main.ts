@@ -2,7 +2,7 @@ import { MergeEditor } from "./panes/merge";
 import { ConnectorOverlay } from "./connectors/overlay";
 import { ControlsLayer } from "./controls/layer";
 import { syncScroll } from "./scroll/sync";
-import { ipc } from "./ipc/client";
+import { ipc, framedEmbed } from "./ipc/client";
 import { EditorView } from "@codemirror/view";
 import { demoModel } from "./demo";
 import { Shortcuts } from "./shortcuts/keymap";
@@ -19,13 +19,20 @@ import type { SessionModel, SessionSummary, SessionProgress, Side } from "./ipc/
 // and connectors all read the CSS vars this sets — one source of truth.
 applyTheme(storedThemeId());
 
-const inTauri = "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
+// Direct Tauri IPC exists only in a real webview main frame. In the Linux host's
+// iframe embed there are no internals — commands ride the postMessage bridge in
+// ipc/client.ts — so `inTauri` means "a backend answers our commands", by either
+// transport, while `hasInternals` gates the Tauri event API specifically.
+const hasInternals = "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
+const inTauri = hasInternals || framedEmbed;
 
-// Embedded inside a host app (fftracking) as a child webview over its diff pane:
-// there is no CLI `Launch`, so the file to show arrives at runtime via the
-// `mcr://embed-open` event instead of `bootstrap`. The host injects
-// `__FF_EMBED__` as a webview initialization script (runs before this bundle).
-const embed = inTauri && "__FF_EMBED__" in window;
+// Embedded inside a host app (fftracking) over its diff pane, one of two ways:
+// a native child webview (macOS — the host injects `__FF_EMBED__` as an init
+// script and drives it via the `mcr://embed-open` Tauri event), or a same-origin
+// iframe (Linux, where tauri cannot position child webviews — the host loads
+// /mcr/index.html?embed=1 and drives it via postMessage). Either way there is no
+// CLI `Launch`; the file to show arrives at runtime.
+const embed = (hasInternals && "__FF_EMBED__" in window) || framedEmbed;
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -119,11 +126,15 @@ function scheduleRefresh() {
   requestAnimationFrame(() => {
     rafPending = false;
     if (!model) return;
-    // Mid-layout or hidden (the embed webview's git tab is on another view):
-    // projecting now would cull every band and repaint the overlay blank for a
-    // frame — the "blink". Skip; the ResizeObserver/visibility handler re-fires
-    // this once the pane has a real height.
+    // Mid-layout or hidden (the embed's git tab is on another view): projecting
+    // now would cull every band and repaint the overlay blank for a frame — the
+    // "blink". Skip; the ResizeObserver/visibility handler re-fires this once
+    // the pane has a real height.
     if (merge.result.scrollDOM.clientHeight === 0) return;
+    // The pane just became measurable: land any scroll anchor that was parked
+    // while it was hidden, in this same frame, so the reveal paints already
+    // centered on the change instead of visibly jumping there.
+    if (anchorTarget) tryAnchor(0);
     overlay.render(model.hunks);
     controls.render(model.hunks);
   });
@@ -307,7 +318,7 @@ window.addEventListener("keydown", (e) => {
     settingsPanel.open();
   }
 });
-if (inTauri) void listen("mcr://open-settings", () => settingsPanel.open());
+if (hasInternals) void listen("mcr://open-settings", () => settingsPanel.open());
 
 // Multi-file navigator + exit-confirmation modal.
 const fileList = new FileList($("file-list"), { onSelect: selectFile, onAccept });
@@ -585,18 +596,30 @@ async function openEmbedded(p: { repoRoot: string; refspec: string; path: string
 }
 
 // Embedded boot: no repository scan and no file list — the two-pane compare
-// chrome is fixed, and the host drives which file is shown via `embed-open`.
+// chrome is fixed, and the host drives which file is shown. Transport depends on
+// how we're hosted: Tauri events in a native child webview, postMessage in the
+// Linux iframe. Either way, announce readiness once the handler is registered so
+// a file selected before this frame finished booting still (re)arrives.
 async function bootEmbedded() {
   appMode = "compare";
   document.body.classList.add("ff-embed");
   showFileList(false);
-  await listen<{ repoRoot: string; refspec: string; path: string }>(
-    "mcr://embed-open",
-    (e) => void openEmbedded(e.payload),
-  );
-  // The host may have emitted the first open before this listener existed (the
-  // webview was still booting); announce readiness so it (re)sends the current file.
-  await emit("mcr://embed-ready", {});
+  if (framedEmbed) {
+    window.addEventListener("message", (e) => {
+      if (e.source !== window.parent) return;
+      const d = e.data as { mcr?: string; repoRoot?: string; refspec?: string; path?: string };
+      if (d && d.mcr === "open" && d.repoRoot && d.refspec && d.path) {
+        void openEmbedded({ repoRoot: d.repoRoot, refspec: d.refspec, path: d.path });
+      }
+    });
+    window.parent.postMessage({ mcr: "ready" }, "*");
+  } else {
+    await listen<{ repoRoot: string; refspec: string; path: string }>(
+      "mcr://embed-open",
+      (e) => void openEmbedded(e.payload),
+    );
+    await emit("mcr://embed-ready", {});
+  }
   $("status").textContent = "";
 }
 
