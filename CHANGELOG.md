@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.3.6
+
+- **The window opens instantly, on any repository size.** Repository discovery
+  used to run before the window was even created, and merge mode then built one
+  session per conflicted file (several git calls + two diffs each) on the main
+  thread — on big repositories MCR looked hung or never-opened. Discovery now
+  runs after the window is up (with a "Scanning repository…" status), the
+  conflicted set is listed from a single index-only `git ls-files -u`, and merge
+  sessions build lazily on first selection, as compare mode already did.
+- **The UI never freezes on git work.** Every command now runs off the main
+  thread, and manual edits in the result pane are debounced into one backend
+  round-trip instead of shipping the full document on every keystroke.
+- **Launched from another app, MCR takes focus.** Spawned as a child process
+  (e.g. by fftracking), the window could open behind the caller and look like it
+  never launched.
+- **Linux launches are FUSE-free and fast.** The installer extracts the AppImage
+  once and points every launcher at the extracted `AppRun` — no libfuse2
+  requirement and no per-launch mount/self-extraction, including for external
+  callers that exec MCR directly.
+
 ## v0.3.5
 
 - **Change navigation skips resolved changes.** The next/previous arrows now stop
